@@ -14,12 +14,12 @@ Every scenario that enters a task score was simulated completely through
 | Design | Area mm² | Q-P128 | Q-P512 | Q-D128 | Q-D512 | Task max r |
 |---|---:|---:|---:|---:|---:|---:|
 | A (prefill) | 1.1078 | 0.3669 | 0.3632 | – | – | **0.367** |
-| B (decode) | 1.0848 | 0.4300 | pending | 0.2791 | 0.2578 | **0.279** |
+| B (decode) | 1.0848 | 0.4300 | 0.4382 | 0.2791 | 0.2578 | **0.279** |
 | C (all four) | 1.1078 | 0.3669 | 0.3632 | 0.3224 | 0.2951 | **0.367** |
 
 A and C use the same hardware ([A_C-hardware.json](designs/A_C-hardware.json)),
-B its own ([B-hardware.json](designs/B-hardware.json)). B's Q-P512 is only a
-cross-evaluation entry and was still running when this was written.
+B its own ([B-hardware.json](designs/B-hardware.json)). B's Q-P512 is a
+cross-evaluation entry (not part of B's score); its v2 slice estimate was also 0.4382.
 
 Compared with iteration 1's complete simulations: A unchanged (0.367), B
 0.313 → 0.279, C 0.378 → 0.367. Speedups against the frozen baseline:

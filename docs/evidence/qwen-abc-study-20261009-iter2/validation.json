@@ -403,6 +403,52 @@
   }
  },
  "B Q-P512": {
-  "status": "running at the time of writing"
+  "completed": true,
+  "cycles_total": 1659822476,
+  "instructions": 2075771996,
+  "ratio": 0.4381980104362642,
+  "per_step_cycles": 1659822476.0,
+  "host_seconds": 6213.5,
+  "source_sha256": "637daf01855ae0d93a53bf289594ee62ea95d7c75cf6a64c4e9934d9bf321487",
+  "runtime_sha256": "d3f3900ca0a61bb6deda38ab653887bd6dbf33c5f34e98711b7563d502571954",
+  "manifest_sha256": "39fc78f3cea826115c6a1afdeda63c3abc2ecf1c5030952ee12a9f211f186fe0",
+  "input_sha256": "38c2d54b2ae861214a7c4105b8b84c2ea8e5ac2d48419e054d05bb89087ad076",
+  "hardware": {
+   "sms": 2,
+   "warps_per_sm": 8,
+   "blocks_per_sm": 8,
+   "threads": 32,
+   "rf_banks": 4,
+   "rf_read_ports": 1,
+   "rf_write_ports": 1,
+   "writeback_ports": 1,
+   "collectors": 8,
+   "vgpr_slots": 1024,
+   "sgpr_slots": 128,
+   "tensor_m": 2,
+   "tensor_n": 16,
+   "tensor_k": 2,
+   "tensor_units": 1,
+   "lds_bytes": 16384,
+   "lds_banks": 8,
+   "lds_ports": 1,
+   "line_bytes": 128,
+   "l1_sets": 128,
+   "l1_ways": 4,
+   "l1_mshrs": 16,
+   "l1_subentries": 1,
+   "l1_write_entries": 16,
+   "l2_sets": 256,
+   "l2_ways": 16,
+   "l2_mshrs": 32,
+   "lsu_entries": 16,
+   "lsu_per_warp": 8,
+   "memory_channels": 1,
+   "memory_bytes_per_cycle": 64,
+   "memory_latency": 100
+  },
+  "phase_cycles": {
+   "prefill": 1659822476
+  }
  }
 }
