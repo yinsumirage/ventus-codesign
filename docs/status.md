@@ -110,3 +110,5 @@ Qwen A/B/C study (2026-10-09): [workflow](qwen-abc-study.md) and [evidence](evid
 Qwen A/B/C iteration 2 (2026-10-09): [evidence](evidence/qwen-abc-study-20261009-iter2/README.md). New compiled `mma_trim_bf16` decode kernel (A-fragment trim) and estimator v2 (warm decode slices). Complete simulations of every task scenario: A 0.367, B 0.279, C 0.367 (max r, 1.11 mm²). Timing and cost semantics unchanged.
 
 Qwen A/B/C iteration 3 (2026-10-09): [evidence](evidence/qwen-abc-study-20261009-iter3/README.md). Compiled 64×64 GEMM tile kernel (VGPR 1024 designs) and packed QK on a 2-SM design. Complete simulations: A 0.342, B 0.279, C 0.342 (design N4). Timing and cost semantics unchanged.
+
+Qwen A/B/C iteration 4 (2026-10-10): [evidence](evidence/qwen-abc-study-20261010-iter4/README.md). The looped GEMM epilogue spilled every accumulator to the private stack before each output store; compiled unrolled-epilogue kernels remove it (same hardware). Complete simulations: A 0.260, B 0.269, C 0.285. Timing and cost semantics unchanged.
