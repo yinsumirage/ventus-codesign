@@ -113,4 +113,4 @@ Qwen A/B/C iteration 3 (2026-10-09): [evidence](evidence/qwen-abc-study-20261009
 
 Qwen A/B/C iteration 4 (2026-10-10): [evidence](evidence/qwen-abc-study-20261010-iter4/README.md). The looped GEMM epilogue spilled every accumulator to the private stack before each output store; compiled unrolled-epilogue kernels remove it (same hardware). Complete simulations: A 0.260, B 0.269, C 0.285. Timing and cost semantics unchanged.
 
-Qwen A/B/C iteration 5 (2026-10-10): [evidence](evidence/qwen-abc-study-20261010-iter5/README.md). Fused SwiGLU packing, per-class multi-tile warps and three new designs (A5, B1, C11), plus the five controls with the current menu and a sequential MIP round. Complete simulations: A 0.231, B 0.258, C 0.262. Timing and cost semantics unchanged.
+Qwen A/B/C iteration 5 (2026-10-10): [evidence](evidence/qwen-abc-study-20261010-iter5/README.md). Fused SwiGLU packing, per-class multi-tile warps and three new designs (A5, B2, C11), plus the five controls with the current menu and a sequential MIP round. Complete simulations: A 0.231, B 0.255, C 0.262. Timing and cost semantics unchanged.

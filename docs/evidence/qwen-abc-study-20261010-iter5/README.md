@@ -9,13 +9,14 @@ memory and T0. Model predictions of the native instruction executor only.
 | Design | Area mm² | Q-P128 | Q-P512 | Q-D128 | Q-D512 | Task max r | Speedup |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | A (prefill): A5 | 1.0865 | **0.2306** | 0.2189 | _(0.2697)_ | _(0.2503)_ | **0.231** | 4.34× |
-| B (decode): B1 | 1.0961 | – | – | **0.2576** | 0.2393 | **0.258** | 3.88× |
+| B (decode): B2 | 1.0966 | _(0.3324)_ | _(0.3011)_ | **0.2547** | 0.2371 | **0.255** | 3.93× |
+| (B1, for reference) | 1.0961 | – | – | 0.2576 | 0.2393 | 0.258 | 3.88× |
 | C (all four): C11 | 1.0882 | 0.2435 | 0.2237 | **0.2615** | 0.2428 | **0.262** | 3.82× |
 
 Bold entries bind the task. Entries in parentheses are sliced cross-evaluations
 (not part of that task); every other entry is a complete `prepare-qwen` +
 `instructions` run ([validation.json](validation.json)). Against iteration 4:
-A 0.260 → 0.231, B 0.269 → 0.258, C 0.285 → 0.262.
+A 0.260 → 0.231, B 0.269 → 0.255, C 0.285 → 0.262.
 
 ![Task scores per iteration and design points](progress.png)
 
@@ -27,7 +28,7 @@ Hardware ([designs/](designs/)); all three keep 2 SMs, 8 warps/blocks, L1 16 MSH
 | | VGPR | SGPR | collectors | Tensor | L1 | L2 | L2 MSHRs |
 |---|---:|---:|---:|---|---|---|---:|
 | A5 | 2048 | 256 | 8 | (4,8,4) | 64 × 4 | 64 × 16 | 32 |
-| B1 | 1024 | 128 | 8 | (2,16,2) | 64 × 4 | 256 × 16 | 64 |
+| B2 | 1024 | 256 | 8 | (2,16,2) | 64 × 4 | 256 × 16 | 64 |
 | C11 | 1024 | 256 | 8 | (4,8,4) | 64 × 4 | 128 × 16 | 32 |
 
 Software (per phase, the same on every design): prefill uses sharing, GQA batching,
@@ -45,7 +46,7 @@ software-only row picks the best of the current menu per scenario on H0
 | Task | Default H0+S0 | Software only | Hardware only | Software then hardware | Joint |
 |---|---:|---:|---:|---:|---:|
 | A | 1.000 | 0.574 | 0.441 | 0.231 | 0.231 |
-| B | 1.000 | 0.839 | 0.433 | 0.258 | 0.258 |
+| B | 1.000 | 0.839 | 0.433 | 0.255 | 0.255 |
 | C | 1.000 | 0.839 | 0.485 | 0.262 | 0.262 |
 
 Default is the frozen baseline (complete). Hardware-only values are iteration 1's
@@ -82,9 +83,9 @@ Paired moves ([r2](experiments/r2-pre.json), [r3](experiments/r3-pre.json),
   (P128 0.2613 → 0.2501 before fusion); 16 warps per SM was worse (0.265).
 - C: decode binds, so L2 128 sets and 8 collectors (D128 0.2609) instead of
   VGPR 2048; prefill (0.244) keeps slack.
-- B: L1 64 sets pays for L2 64 MSHRs (B1, D128 0.2592 → 0.2575). SGPR 128 → 256
-  gives 0.2548 in slices (B2: the multi-tile kernel needs 21 SGPRs, so 128 allow
-  only 6 warps per SM); its complete run is still in progress.
+- B: L1 64 sets pays for L2 64 MSHRs (B1, D128 0.2592 → 0.2575), and SGPR
+  128 → 256 (B2, 0.2548): the multi-tile kernel needs 21 SGPRs, so 128 allowed
+  only 6 warps per SM. Complete: B1 0.2576, B2 0.2547.
 
 Single-field neighbourhoods of A5, C11 and B1 with the final software
 ([nls5-pre](experiments/nls5-pre.json), [nls5-dec](experiments/nls5-dec.json)) found
