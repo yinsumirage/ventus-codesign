@@ -9,16 +9,18 @@ native instruction executor only.
 
 | Design | Area mm² | Q-P128 | Q-P512 | Q-D128 | Q-D512 | Task max r |
 |---|---:|---:|---:|---:|---:|---:|
-| A (prefill): N3 | 1.0865 | 0.3422 | 0.3339 | – | – | **0.342** |
+| A (prefill): N4 | 1.0812 | 0.3417 | 0.3308 | – | – | **0.342** |
 | B (decode): iteration 2 | 1.0848 | 0.4300 | 0.4382 | 0.2791 | 0.2578 | **0.279** |
-| C (all four): N3 | 1.0865 | 0.3422 | 0.3339 | 0.2904 | 0.2677 | **0.342** |
+| C (all four): N4 | 1.0812 | 0.3417 | 0.3308 | 0.2953 | 0.2719 | **0.342** |
+| (N3, for reference) | 1.0865 | 0.3422 | 0.3339 | 0.2904 | 0.2677 | 0.342 |
 
 Every entry is a complete `prepare-qwen` + `instructions` run ([validation.json](validation.json)).
-N3 is hardware N ([N-hardware.json](designs/N-hardware.json)) with prefill software
-[N3-software-Q-P128.json](designs/N3-software-Q-P128.json); its decode entries are
-the complete runs of N with the trim kernel (same hardware and decode program).
-Against iteration 2: A 0.367 → 0.342, C 0.367 → 0.342, B unchanged; speedups
-A 2.92×, B 3.58×, C 2.92×.
+N4 ([N4-hardware.json](designs/N4-hardware.json)) is N with L2 128 → 64 sets and
+32 → 64 MSHRs; prefill software [N4-software-Q-P128.json](designs/N4-software-Q-P128.json),
+decode the trim kernel. N3 is hardware N with the same software; its decode entries
+are N's complete runs. N4 is selected for A and C (max r 0.3417 against 0.3422, and
+0.005 mm² smaller). Against iteration 2: A 0.367 → 0.342, C 0.367 → 0.342, B
+unchanged; speedups A 2.93×, B 3.58×, C 2.93×.
 
 N: 2 SMs, 8 warps/blocks, VGPR 1024, SGPR 256, Tensor (4,8,4)×1, LDS 16 KiB/8 banks,
 L1 128 sets × 4 ways with 16 MSHRs, 1 subentry and 16 write entries, L2 128 × 16 with
@@ -51,8 +53,8 @@ because QK's score stores bind on two SMs. Iteration 1 had rejected packed QK
 P128 0.347 → 0.341 (slices), confirmed by complete runs (0.3339, 0.3422). Staging
 QK stores through LDS gave no further gain. A paired-field search with this
 software ([nls2](experiments/nls2.json)) found L2 128 → 64 sets with 64 MSHRs
-(N4) within 0.3% on prefill; its complete decode runs are worse (0.2953/0.2719) and
-its Q-P512 was still running.
+(N4) within 0.3% on prefill; complete runs confirmed it (P128 0.3417, P512 0.3308),
+with slightly worse decode (0.2953/0.2719) that does not bind.
 
 The MIP did not propose 64×64 by itself: the new tile had too few samples, so the
 surrogate's unseen-level penalty kept it away; the 2-SM/64×64 region was found by
@@ -60,7 +62,7 @@ targeted simulator exploration and then refined by simulator-driven local search
 
 ## Software of the selected designs
 
-| Scenario | A/C (N3) | B |
+| Scenario | A/C (N4) | B |
 |---|---|---|
 | prefill | sharing, GQA batching, packed PV and packed QK, column order, 64×64 tiles for all multi-row GEMMs | (cross-evaluation only) column order, packed PV, 32×64 |
 | decode | sharing, GQA batching, fusion, column order, trim | same |
