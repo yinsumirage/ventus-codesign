@@ -53,6 +53,14 @@ def test_empty_options_keep_packed64_dispatches(tmp_path):
         (64, dict(packed_pv=True, tiles={"pv": "16x16", "qk": "16x16"})),
         (32, dict(ALL, block_order="col")),
         (32, dict(ALL, block_order="col", epilogue="lds")),
+        (
+            64,
+            dict(
+                ALL,
+                block_order="col",
+                tiles={"gate": "64x64", "up": "64x64", "down": "64x64", "qk": "64x64"},
+            ),
+        ),
         (64, dict(ALL, block_order="col", tiles={"gate": "16x16", "o": "16x64", "qk": "32x64"})),
     ],
 )
@@ -157,6 +165,8 @@ def _store_trace(kind, kernel, m, n, k, two_m):
     out = 0x90030000
     if kernel == "mma_packed_ncol_bf16":
         args, blocks = [0x90000000, 0x90010000, 0, out, m, n, k, 0], -(-m // 16) * -(-n // 16)
+    elif kernel == "mma_m64_bf16":
+        args, blocks = [0x90000000, 0x90010000, 0, out, m, n, k, 0], -(-m // 64) * (n // 64)
     else:
         rows = 32 if two_m else 16
         args = [0x90000000, 0x90010000, 0, out, m, n, k, 0, two_m]
@@ -186,6 +196,7 @@ def _store_trace(kind, kernel, m, n, k, two_m):
         ("stage", "mma_stage_bf16", 1, 0),
         ("stage", "mma_trim_bf16", 20, 1),
         ("stage", "mma_trim_bf16", 1, 0),
+        ("m64", "mma_m64_bf16", 100, 0),
         ("ncol", "mma_reuse_ncol_bf16", 20, 1),
         ("ncol", "mma_packed_ncol_bf16", 20, 0),
     ],

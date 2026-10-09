@@ -101,7 +101,7 @@ class Allocator:
         return address
 
 
-GEMM_TILES = ("16x16", "16x64", "32x64")
+GEMM_TILES = ("16x16", "16x64", "32x64", "64x64")
 # __local staging buffer of mma_stage_bf16, as an offset from the LDS base (the ABI
 # passes __local arguments as offsets), above the compiler LDS stack (the
 # provider starts the stack at the LDS base; the GEMM kernels use 44 B of it).
@@ -213,7 +213,7 @@ def qwen_manifest(
         "generic",
         "mma",
         "packed",
-        *[k for k in ("reuse", "ncol", "stage") if k in bundle],
+        *[k for k in ("reuse", "ncol", "stage", "m64") if k in bundle],
     ):
         elf = ELFProgram.read(bundle_path.parent / bundle[kind])
         if elf.sha256 != bundle[kind + "_sha256"]:
@@ -326,7 +326,7 @@ def qwen_manifest(
     packed_source = [None]
 
     def emit(name, kernel, args, items, kind="generic", known=None, check=None):
-        if kind not in ("packed", "reuse", "ncol", "stage"):
+        if kind not in ("packed", "reuse", "ncol", "stage", "m64"):
             # Any other kernel may rewrite a packed source; never reuse across it.
             packed_source[0] = None
         elf_hash = bundle[kind + "_sha256"]
@@ -361,6 +361,21 @@ def qwen_manifest(
             tile = sw["tiles"].get(name.rsplit(".", 1)[-1])
             if tile is None and mapping == "packed64" and n % 64 == 0:
                 tile = "32x64" if m >= 32 else "16x64"
+            if tile == "64x64":
+                if n % 64 or m <= 16 or "m64" not in bundle:
+                    raise ValueError(f"64x64 tile does not apply to {name}")
+                emit(
+                    name,
+                    "mma_m64_bf16",
+                    [packed_a, b, bias, o, m, n, kdim, int(bool(bias))],
+                    -(-m // 64) * (n // 64) * 32,
+                    "m64",
+                    check=dict(
+                        effective_multiplies=m * n * kdim,
+                        mma_instructions=-(-m // 64) * (n // 64) * 16 * ((kdim + 15) // 16),
+                    ),
+                )
+                return
             if tile in ("16x64", "32x64"):
                 if n % 64 or (tile == "32x64" and m <= 16):
                     raise ValueError(f"{tile} tile does not apply to {name}")

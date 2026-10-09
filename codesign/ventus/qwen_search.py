@@ -22,12 +22,18 @@ ROOT = Path(__file__).resolve().parents[2]
 SPACE = json.loads((ROOT / "examples/search-space-v3.json").read_text())
 RANGES = dict(SPACE["active_budget_ranges"])
 FIELDS = list(RANGES)
-TILES = {"prefill": ("16x16", "16x64", "32x64"), "decode": ("16x16", "16x64")}
+TILES = {"prefill": ("16x16", "16x64", "32x64", "64x64"), "decode": ("16x16", "16x64")}
 AUTO_TILE = {"prefill": "32x64", "decode": "16x64"}
-GEMM_KERNEL = {"16x16": "mma_packed_bf16", "16x64": "mma_reuse_bf16", "32x64": "mma_reuse_bf16"}
+GEMM_KERNEL = {
+    "16x16": "mma_packed_bf16",
+    "16x64": "mma_reuse_bf16",
+    "32x64": "mma_reuse_bf16",
+    "64x64": "mma_m64_bf16",
+}
 # Compiled per-warp resources from the pinned bundle ELF metadata (see qwen_study).
 KERNEL_RESOURCES = {
     "mma_reuse_bf16": dict(vgpr=98, sgpr=14, lds=128),
+    "mma_m64_bf16": dict(vgpr=173, sgpr=13, lds=128),
     "mma_packed_bf16": dict(vgpr=33, sgpr=11, lds=128),
     "addmm_mma_bf16": dict(vgpr=45, sgpr=22, lds=128),
     "pack_a_bf16": dict(vgpr=12, sgpr=12, lds=128),
@@ -91,15 +97,16 @@ def software_for(phase, tile, packed_pv=True, order="row", epilogue="direct"):
     if epilogue != "direct":
         base["epilogue"] = epilogue
     if tile != AUTO_TILE[phase]:
+        # The one-row LM head keeps its automatic 16x64 tile unless 16x16 is chosen.
         base["tiles"] = {
-            c: tile for c in GEMM_CLASSES[phase] if not (c == "lm_head" and tile == "16x64")
+            c: tile for c in GEMM_CLASSES[phase] if not (c == "lm_head" and tile != "16x16")
         }
     return base
 
 
 # Tiles dominated in every earlier joint round (prefill 16x64, decode 16x16) are
 # pruned from the default menu; MENU_TILES = TILES restores the full enumeration.
-MENU_TILES = {"prefill": ("16x16", "32x64"), "decode": ("16x64",)}
+MENU_TILES = {"prefill": ("32x64", "64x64"), "decode": ("16x64",)}
 
 
 def phase_menu(phase, tiles=None):

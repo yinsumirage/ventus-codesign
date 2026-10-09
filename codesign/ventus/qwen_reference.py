@@ -297,6 +297,20 @@ def k_addmm(mem, items, a, b, bias, o, m, n, k, as0, as1, _a, bs0, bs1, _b, os0,
     view[i[:, None] * os0 + j[None, :] * os1] = to_bf16(acc.astype(np.float32))
 
 
+def k_mma_m64(mem, items, a, b, bias, out, m, n, k, has_bias):
+    kt, _, _, a_tile, b_tile = _mma_tiles(mem, a, b, m, n, k)
+    mtiles = -(-m // 64)
+    for tile in range(items // 32):
+        mt, nn = (tile % mtiles) * 4, (tile // mtiles) * 4
+        for dm in range(4):
+            for dn in range(4):
+                acc = _tile_result(
+                    a_tile, b_tile, mt + dm, nn + dn, kt, _bias(mem, bias, has_bias, n, nn + dn)
+                )
+                if (mt + dm) * 16 < m and (nn + dn) * 16 < n:
+                    _store(mem, out, m, n, acc, mt + dm, nn + dn)
+
+
 KERNELS = {
     "embedding_packed_bf16": k_embedding_packed,
     "embedding_bf16": k_embedding,
@@ -317,6 +331,9 @@ KERNELS = {
     # the warp writes them (the compiled store coverage is checked from traces).
     "mma_stage_bf16": lambda *args: k_mma_reuse(*args[:-1], column_order=True),
     "mma_trim_bf16": lambda *args: k_mma_reuse(*args, column_order=True),
+    "mma_m64_bf16": lambda mem, items, a, b, bias, out, m, n, k, hb: k_mma_m64(
+        mem, items, a, b, bias, out, m, n, k, hb
+    ),
     "addmm_mma_bf16": k_addmm,
 }
 

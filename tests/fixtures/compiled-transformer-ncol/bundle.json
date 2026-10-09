@@ -33,5 +33,9 @@
   "stage": "stage.elf",
   "stage_sha256": "ae2b712e852b2fc3e2a108b4fb259c3f680c68a8b87743bc008579e46df36d2b",
   "stage_source": "examples/kernels/mma_stage_bf16.cl",
-  "stage_source_sha256": "52a5e1b8134e8e3986b401c1e34576421572fa95d0057f26562f35dc86fef636"
+  "stage_source_sha256": "52a5e1b8134e8e3986b401c1e34576421572fa95d0057f26562f35dc86fef636",
+  "m64": "m64.elf",
+  "m64_sha256": "02cead017af7c34918e6539af1c557409bd4b59e528e6c4433d330ebd8427948",
+  "m64_source": "examples/kernels/mma_m64_bf16.cl",
+  "m64_source_sha256": "71ee4172712947bfbc6992bd338d42cb6b0152652765931832ae0ff855f698de"
 }
