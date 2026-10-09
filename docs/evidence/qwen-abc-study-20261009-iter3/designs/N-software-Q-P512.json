@@ -1,0 +1,1 @@
+{"share_packing": true, "gqa_batch": true, "fuse_rows1": false, "packed_attention": false, "packed_pv": true, "tiles": {"q": "64x64", "k": "64x64", "v": "64x64", "o": "64x64", "gate": "64x64", "up": "64x64", "down": "64x64", "qk": "64x64", "pv": "64x64"}, "block_order": "col"}
