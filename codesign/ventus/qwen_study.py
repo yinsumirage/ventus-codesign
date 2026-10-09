@@ -227,6 +227,10 @@ class Study:
                 key["block_order"] = software["block_order"]
             if software.get("epilogue", "direct") != "direct":
                 key["epilogue"] = software["epilogue"]
+            tpw = software.get("tiles_per_warp", 1)
+            lm_tpw = tpw.get("lm_head", 1) if isinstance(tpw, dict) else tpw
+            if lm_tpw != 1:
+                key["tiles_per_warp"] = lm_tpw
             return digest(key)
         return digest(dict(hw=hw, scenario=scenario, software=software, part=part))
 

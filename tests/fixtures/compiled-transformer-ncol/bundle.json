@@ -37,5 +37,17 @@
   "m64": "m64.elf",
   "m64_sha256": "02cead017af7c34918e6539af1c557409bd4b59e528e6c4433d330ebd8427948",
   "m64_source": "examples/kernels/mma_m64_bf16.cl",
-  "m64_source_sha256": "71ee4172712947bfbc6992bd338d42cb6b0152652765931832ae0ff855f698de"
+  "m64_source_sha256": "71ee4172712947bfbc6992bd338d42cb6b0152652765931832ae0ff855f698de",
+  "unroll": "unroll.elf",
+  "unroll_sha256": "b171ae2bdb406bac57e89487979f2ac1d2c3449d5381f7759e7a8425335fd78d",
+  "unroll_source": "examples/kernels/mma_unroll_bf16.cl",
+  "unroll_source_sha256": "8babb94065c7feedb182b13263178cc0a68b6638b495fb200bbae266c8eba84c",
+  "multi": "multi.elf",
+  "multi_sha256": "fff81e73c0aa15cfa4055fdaad3c98d4013664d8959b372bd525b9b1a18f851a",
+  "multi_source": "examples/kernels/mma_multi_bf16.cl",
+  "multi_source_sha256": "9528e6d4f67100b9d4c7914fd5e5b92e62faecefb2d66a6d824d21120ce65c6f",
+  "fuse": "fuse.elf",
+  "fuse_sha256": "a96c42b6c2e9cd9f36f3f1f616a081a5a40d5c34c42abdf8804759db86e79433",
+  "fuse_source": "examples/kernels/fused_bf16.cl",
+  "fuse_source_sha256": "3b9f2ded688d26ccaea8956c6c0d40f354ea4b984e5d939159a2c0cffbe6a29a"
 }

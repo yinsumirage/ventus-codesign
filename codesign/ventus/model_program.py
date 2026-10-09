@@ -107,9 +107,20 @@ GEMM_TILES = ("16x16", "16x64", "32x64", "64x64")
 # provider starts the stack at the LDS base; the GEMM kernels use 44 B of it).
 STAGE_LDS = 128
 GEMM_CLASSES = ("q", "k", "v", "qkv", "o", "gate", "up", "gate_up", "down", "lm_head", "qk", "pv")
-SWITCHES = ("share_packing", "gqa_batch", "fuse_rows1", "packed_attention", "packed_pv")
+SWITCHES = (
+    "share_packing",
+    "gqa_batch",
+    "fuse_rows1",
+    "packed_attention",
+    "packed_pv",
+    "fuse_swiglu",
+)
 SOFTWARE_DEFAULTS = dict(
-    tiles={}, block_order="row", epilogue="direct", **dict.fromkeys(SWITCHES, False)
+    tiles={},
+    block_order="row",
+    epilogue="direct",
+    tiles_per_warp=1,
+    **dict.fromkeys(SWITCHES, False),
 )
 
 
@@ -128,8 +139,15 @@ def software_options(software):
         bundle's compiled ncol kernels). Tiles, registers and MMA sequence are unchanged.
     epilogue: "direct" (one BF16 store per lane) or "lds" (16x64/32x64 column-order
         GEMMs stage results through 256 B of LDS and store full 128 B row lines;
-        m <= 4 loads only the non-zero A fragment register) or "trim" (direct stores
-        with the same A-fragment trim). Both need block_order "col".
+        m <= 4 loads only the non-zero A fragment register), "trim" (direct stores
+        with the same A-fragment trim) or "unrolled" (trim, with the store loop
+        unrolled so accumulators are not spilled to the private stack; also selects
+        the unrolled 64x64 kernel). All three need block_order "col".
+    tiles_per_warp: output tiles each warp computes in turn (unrolled reuse GEMMs
+        only; 1 launches one warp per tile), as one value or per GEMM class (others
+        1). Amortizes the kernel entry's callee-saved register spills over tiles.
+    fuse_swiglu: one dispatch computes SwiGLU directly into the packed A tiles of
+        the down GEMM (bit-identical tiles; needs share_packing and the fuse ELF).
     """
     options = {**SOFTWARE_DEFAULTS, **(software or {})}
     if set(options) != set(SOFTWARE_DEFAULTS):
@@ -143,11 +161,26 @@ def software_options(software):
         raise ValueError("software switches must be booleans")
     if options["block_order"] not in ("row", "col"):
         raise ValueError("block_order is row or col")
-    if options["epilogue"] not in ("direct", "lds", "trim"):
-        raise ValueError("epilogue is direct, lds or trim")
+    if options["epilogue"] not in ("direct", "lds", "trim", "unrolled"):
+        raise ValueError("epilogue is direct, lds, trim or unrolled")
     if options["epilogue"] != "direct" and options["block_order"] != "col":
-        raise ValueError("lds/trim epilogues are compiled for column block order")
+        raise ValueError("lds/trim/unrolled epilogues are compiled for column block order")
+    tpw = options["tiles_per_warp"]
+    values = tpw.values() if isinstance(tpw, dict) else [tpw]
+    if any(type(v) is not int or v not in (1, 2, 4, 8) for v in values) or (
+        isinstance(tpw, dict) and any(k not in GEMM_CLASSES for k in tpw)
+    ):
+        raise ValueError("tiles_per_warp is 1, 2, 4 or 8, or a GEMM class map of these")
+    if max(values, default=1) > 1 and options["epilogue"] != "unrolled":
+        raise ValueError("several tiles per warp are compiled for the unrolled epilogue")
+    if options["fuse_swiglu"] and not options["share_packing"]:
+        raise ValueError("fuse_swiglu hands its packed tiles to the down GEMM (share_packing)")
     return options
+
+
+def tiles_per_warp(sw, gemm_class):
+    tpw = sw["tiles_per_warp"]
+    return tpw.get(gemm_class, 1) if isinstance(tpw, dict) else tpw
 
 
 def qwen_manifest(
@@ -207,13 +240,19 @@ def qwen_manifest(
     out.mkdir()
     if sw["block_order"] == "col" and "ncol" not in bundle:
         raise ValueError("column block order needs a bundle with compiled ncol kernels")
-    if sw["epilogue"] != "direct" and "stage" not in bundle:
+    if sw["epilogue"] in ("lds", "trim") and "stage" not in bundle:
         raise ValueError("LDS-staged epilogue needs a bundle with the compiled stage kernel")
+    if sw["epilogue"] == "unrolled" and "unroll" not in bundle:
+        raise ValueError("unrolled epilogue needs a bundle with the compiled unroll kernels")
+    if any(tiles_per_warp(sw, c) > 1 for c in GEMM_CLASSES) and "multi" not in bundle:
+        raise ValueError("several tiles per warp need a bundle with the compiled multi kernels")
+    if sw["fuse_swiglu"] and "fuse" not in bundle:
+        raise ValueError("fuse_swiglu needs a bundle with the compiled fuse kernel")
     for kind in (
         "generic",
         "mma",
         "packed",
-        *[k for k in ("reuse", "ncol", "stage", "m64") if k in bundle],
+        *[k for k in ("reuse", "ncol", "stage", "m64", "unroll", "multi", "fuse") if k in bundle],
     ):
         elf = ELFProgram.read(bundle_path.parent / bundle[kind])
         if elf.sha256 != bundle[kind + "_sha256"]:
@@ -326,7 +365,7 @@ def qwen_manifest(
     packed_source = [None]
 
     def emit(name, kernel, args, items, kind="generic", known=None, check=None):
-        if kind not in ("packed", "reuse", "ncol", "stage", "m64"):
+        if kind not in ("packed", "reuse", "ncol", "stage", "m64", "unroll", "multi"):
             # Any other kernel may rewrite a packed source; never reuse across it.
             packed_source[0] = None
         elf_hash = bundle[kind + "_sha256"]
@@ -359,17 +398,20 @@ def qwen_manifest(
                 )
             packed_source[0] = (a, m, kdim) if o != a else None
             tile = sw["tiles"].get(name.rsplit(".", 1)[-1])
+            tpw = tiles_per_warp(sw, name.rsplit(".", 1)[-1])
             if tile is None and mapping == "packed64" and n % 64 == 0:
                 tile = "32x64" if m >= 32 else "16x64"
             if tile == "64x64":
-                if n % 64 or m <= 16 or "m64" not in bundle:
+                unrolled = sw["epilogue"] == "unrolled"
+                if n % 64 or m <= 16 or ("unroll" if unrolled else "m64") not in bundle:
                     raise ValueError(f"64x64 tile does not apply to {name}")
+                tiles = -(-m // 64) * (n // 64)
                 emit(
                     name,
-                    "mma_m64_bf16",
+                    "mma_m64m_bf16" if tpw > 1 else "mma_m64u_bf16" if unrolled else "mma_m64_bf16",
                     [packed_a, b, bias, o, m, n, kdim, int(bool(bias))],
-                    -(-m // 64) * (n // 64) * 32,
-                    "m64",
+                    -(-tiles // tpw) * 32,
+                    "multi" if tpw > 1 else "unroll" if unrolled else "m64",
                     check=dict(
                         effective_multiplies=m * n * kdim,
                         mma_instructions=-(-m // 64) * (n // 64) * 16 * ((kdim + 15) // 16),
@@ -388,6 +430,10 @@ def qwen_manifest(
                     if staged
                     else ("mma_trim_bf16", "stage")
                     if sw["epilogue"] == "trim"
+                    else ("mma_trimm_bf16", "multi")
+                    if tpw > 1
+                    else ("mma_trimu_bf16", "unroll")
+                    if sw["epilogue"] == "unrolled"
                     else ("mma_reuse_ncol_bf16", "ncol")
                     if col
                     else ("mma_reuse_bf16", "reuse")
@@ -397,7 +443,7 @@ def qwen_manifest(
                     kernel,
                     [packed_a, b, bias, o, m, n, kdim, int(bool(bias)), two_m]
                     + ([STAGE_LDS] if staged else []),
-                    ((m + mt - 1) // mt) * (n // 64) * 32,
+                    -(-((m + mt - 1) // mt) * (n // 64) // tpw) * 32,
                     kind,
                     check=dict(
                         effective_multiplies=m * n * kdim,
@@ -667,12 +713,25 @@ def qwen_manifest(
                     (1, width),
                     (n, 1),
                 )
-            emit(
-                stem + ".swiglu",
-                "packed_swiglu_bf16",
-                [gate, up, glu, rows * ff // 2],
-                rows * ff // 2,
-            )
+            if sw["fuse_swiglu"] and mapping == "packed64":
+                if ff % 16:
+                    raise ValueError("fused SwiGLU packing needs a 16-multiple FFN width")
+                emit(
+                    stem + ".swiglu_pack",
+                    "swiglu_pack_bf16",
+                    [gate, up, packed_a, rows, ff],
+                    -(-rows // 16) * (ff // 16) * 32,
+                    "fuse",
+                )
+                # The down GEMM reads these tiles as the packing of glu.
+                packed_source[0] = (glu, rows, ff)
+            else:
+                emit(
+                    stem + ".swiglu",
+                    "packed_swiglu_bf16",
+                    [gate, up, glu, rows * ff // 2],
+                    rows * ff // 2,
+                )
             mm(
                 stem + ".down",
                 glu,

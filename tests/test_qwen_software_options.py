@@ -62,6 +62,37 @@ def test_empty_options_keep_packed64_dispatches(tmp_path):
             ),
         ),
         (64, dict(ALL, block_order="col", tiles={"gate": "16x16", "o": "16x64", "qk": "32x64"})),
+        (
+            64,
+            dict(
+                ALL,
+                block_order="col",
+                epilogue="unrolled",
+                tiles={"gate": "64x64", "up": "64x64", "qk": "64x64", "o": "32x64"},
+            ),
+        ),
+        (
+            64,
+            dict(
+                ALL,
+                block_order="col",
+                epilogue="unrolled",
+                tiles_per_warp=4,
+                tiles={"gate": "64x64", "down": "64x64", "o": "32x64"},
+            ),
+        ),
+        (
+            64,
+            dict(
+                ALL,
+                block_order="col",
+                epilogue="unrolled",
+                fuse_swiglu=True,
+                tiles_per_warp={"gate": 2, "lm_head": 4},
+                tiles={"gate": "64x64", "up": "64x64", "down": "64x64"},
+            ),
+        ),
+        (32, dict(share_packing=True, fuse_swiglu=True, block_order="col")),
     ],
 )
 def test_prefill_options_preserve_logits_and_kv(tmp_path, context, software):
@@ -84,6 +115,15 @@ def test_prefill_options_preserve_logits_and_kv(tmp_path, context, software):
         dict(ALL, block_order="col", tiles={"qkv": "16x16"}),
         dict(ALL, block_order="col", epilogue="lds"),
         dict(ALL, block_order="col", epilogue="trim"),
+        dict(ALL, block_order="col", epilogue="unrolled"),
+        dict(ALL, block_order="col", epilogue="unrolled", tiles_per_warp=2),
+        dict(
+            ALL,
+            block_order="col",
+            epilogue="unrolled",
+            fuse_swiglu=True,
+            tiles_per_warp={"gate_up": 2, "lm_head": 8},
+        ),
     ],
 )
 def test_decode_options_preserve_logits_and_kv(tmp_path, software):
@@ -153,7 +193,7 @@ def test_column_order_bundle_reuses_frozen_elves_and_compiled_resources():
     ) == (33, 11)
 
 
-def _store_trace(kind, kernel, m, n, k, two_m):
+def _store_trace(kind, kernel, m, n, k, two_m, tiles_per_warp=1):
     """Global/LDS store addresses of one compiled GEMM launch (dynamic trace)."""
     from codesign.ventus.config import Hardware
     from codesign.ventus.elf import ELFProgram
@@ -165,7 +205,7 @@ def _store_trace(kind, kernel, m, n, k, two_m):
     out = 0x90030000
     if kernel == "mma_packed_ncol_bf16":
         args, blocks = [0x90000000, 0x90010000, 0, out, m, n, k, 0], -(-m // 16) * -(-n // 16)
-    elif kernel == "mma_m64_bf16":
+    elif kernel in ("mma_m64_bf16", "mma_m64u_bf16", "mma_m64m_bf16"):
         args, blocks = [0x90000000, 0x90010000, 0, out, m, n, k, 0], -(-m // 64) * (n // 64)
     else:
         rows = 32 if two_m else 16
@@ -173,6 +213,7 @@ def _store_trace(kind, kernel, m, n, k, two_m):
         if kernel == "mma_stage_bf16":
             args.append(128)  # LDS offset: the ABI adds the LDS base
         blocks = -(-m // rows) * (n // 64)
+    blocks = -(-blocks // tiles_per_warp)
     launch = elf.launch(kernel, args, global_size=(blocks * 32, 1, 1))
     with RustSession(Hardware(), instruction_target=TARGET) as session:
         data = list(session.generate(elf.words, launch).data)
@@ -197,13 +238,20 @@ def _store_trace(kind, kernel, m, n, k, two_m):
         ("stage", "mma_trim_bf16", 20, 1),
         ("stage", "mma_trim_bf16", 1, 0),
         ("m64", "mma_m64_bf16", 100, 0),
+        ("unroll", "mma_trimu_bf16", 20, 1),
+        ("unroll", "mma_trimu_bf16", 1, 0),
+        ("unroll", "mma_m64u_bf16", 100, 0),
+        ("multi", "mma_trimm_bf16", 20, 1),
+        ("multi", "mma_trimm_bf16", 1, 0),
+        ("multi", "mma_m64m_bf16", 100, 0),
         ("ncol", "mma_reuse_ncol_bf16", 20, 1),
         ("ncol", "mma_packed_ncol_bf16", 20, 0),
     ],
 )
 def test_compiled_gemm_stores_cover_output_exactly_once(kind, kernel, m, two_m):
     n, k = 128, 40
-    out, stores = _store_trace(kind, kernel, m, n, k, two_m)
+    # Multi-tile kernels run with fewer warps than tiles (three tiles for some warps).
+    out, stores = _store_trace(kind, kernel, m, n, k, two_m, 3 if kind == "multi" else 1)
     written = []
     for addresses, width in stores:
         # 0x6xxxxxxx is the per-thread private stack (compiler spills), 0x7xxxxxxx LDS.
@@ -220,3 +268,30 @@ def test_compiled_gemm_stores_cover_output_exactly_once(kind, kernel, m, two_m):
             # Every staged global store writes inside a single 128 B line.
             assert len({a // 128 for a in glob}) == 1
     assert sorted(written) == list(range(out, out + m * n * 2))
+
+
+@pytest.mark.parametrize(
+    "spilled,unrolled,m,two_m",
+    [
+        (("stage", "mma_trim_bf16"), ("unroll", "mma_trimu_bf16"), 20, 1),
+        (("m64", "mma_m64_bf16"), ("unroll", "mma_m64u_bf16"), 100, 0),
+    ],
+)
+def test_unrolled_epilogue_removes_private_stack_stores(spilled, unrolled, m, two_m):
+    """The looped epilogue spills all accumulators before every output store."""
+
+    def private(kind, kernel):
+        _, stores = _store_trace(kind, kernel, m, 128, 40, two_m)
+        return sum(any(0x60000000 <= a < 0x70000000 for a in s) for s, _ in stores)
+
+    before, after = private(*spilled), private(*unrolled)
+    assert after * 4 < before
+
+
+@pytest.mark.parametrize("kernel,m,two_m", [("mma_trimm_bf16", 20, 1), ("mma_m64m_bf16", 100, 0)])
+def test_multi_tile_warps_pay_entry_spills_once(kernel, m, two_m):
+    def private(tiles_per_warp):
+        _, stores = _store_trace("multi", kernel, m, 256, 40, two_m, tiles_per_warp)
+        return sum(any(0x60000000 <= a < 0x70000000 for a in s) for s, _ in stores)
+
+    assert private(4) * 4 == private(1)

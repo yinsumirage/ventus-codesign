@@ -17,7 +17,10 @@ claims; nothing here is an RTL or silicon measurement.
 | `codesign/ventus/model_program.py` | `software=` options extending packed64 (default `None` keeps the original program) |
 | `examples/kernels/mma_reuse_ncol_bf16.cl` | column-strip block order variants of the reuse and packed GEMM kernels |
 | `examples/kernels/mma_stage_bf16.cl` | `mma_trim_bf16` (A-fragment trim) and `mma_stage_bf16` (trim + LDS-staged epilogue) |
-| `tests/fixtures/compiled-transformer-ncol/` | the frozen four ELFs plus the compiled column-order ELF and its receipt |
+| `examples/kernels/mma_m64_bf16.cl` | 64×64 output tile per warp (VGPR 173) |
+| `examples/kernels/mma_unroll_bf16.cl` | `mma_trimu_bf16`, `mma_m64u_bf16`: trim / 64×64 with the store loop unrolled (no per-store accumulator spills) |
+| `examples/kernels/mma_multi_bf16.cl` | `mma_trimm_bf16`, `mma_m64m_bf16`: unrolled kernels where each warp computes several tiles in turn |
+| `tests/fixtures/compiled-transformer-ncol/` | the frozen four ELFs plus the compiled column-order, stage, m64, unroll and multi ELFs and their receipts |
 | `codesign/ventus/qwen_study.py` | sliced evaluator, legality (area, compiled residency), append-only slice cache |
 | `codesign/ventus/qwen_search.py` | surrogate features, ridge fit, HiGHS MIP with unified area rows |
 | `codesign/ventus/qwen_abc.py` | rounds: fit → MIP per software combination → independent check → simulate |
@@ -35,9 +38,10 @@ claims; nothing here is an RTL or silicon measurement.
 | `fuse_rows1` | concatenated q/k/v and gate/up weights for single-row GEMMs; no head join | decode |
 | `packed_pv` | PV over V rearranged into MMA B tiles (one chunked `transpose_append` per KV head) | prefill |
 | `packed_attention` | additionally QK over K tiles (element transpose); kept for the record | prefill |
-| `tiles` | per GEMM class: `16x16`, `16x64`, `32x64` | both |
+| `tiles` | per GEMM class: `16x16`, `16x64`, `32x64`, `64x64` (m > 16) | both |
 | `block_order` | `col` uses the compiled column-order kernels (needs the ncol bundle) | both |
-| `epilogue` | `trim`: column-order kernel that loads only the non-zero A fragment register for m ≤ 4; `lds`: additionally stages outputs through LDS for full-line stores (both need `col`) | both |
+| `epilogue` | `trim`: column-order kernel that loads only the non-zero A fragment register for m ≤ 4; `lds`: additionally stages outputs through LDS for full-line stores; `unrolled`: trim with constant-index stores, so the compiler no longer writes the whole accumulator to the private stack before each output store (also selects the unrolled 64×64 kernel; all need `col`) | both |
+| `tiles_per_warp` | 1, 2, 4 or 8 output tiles per warp (`unrolled` only): the kernel entry's callee-saved register spills are paid once per warp | both |
 
 The network, BF16 storage, FP32 accumulation and semantics are unchanged; every
 layout conversion is a timed dispatch. The NumPy replay compares logits and

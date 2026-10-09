@@ -34,6 +34,8 @@ GEMM_KERNEL = {
 KERNEL_RESOURCES = {
     "mma_reuse_bf16": dict(vgpr=98, sgpr=14, lds=128),
     "mma_m64_bf16": dict(vgpr=173, sgpr=13, lds=128),
+    "mma_trimu_bf16": dict(vgpr=100, sgpr=14, lds=128),
+    "mma_m64u_bf16": dict(vgpr=166, sgpr=13, lds=128),
     "mma_packed_bf16": dict(vgpr=33, sgpr=11, lds=128),
     "addmm_mma_bf16": dict(vgpr=45, sgpr=22, lds=128),
     "pack_a_bf16": dict(vgpr=12, sgpr=12, lds=128),
@@ -110,19 +112,30 @@ MENU_TILES = {"prefill": ("32x64", "64x64"), "decode": ("16x64",)}
 
 
 def phase_menu(phase, tiles=None):
-    """Joint-search software menu: tiles x packed PV x block order (prefill)."""
+    """Joint-search software menu: tiles x packed PV x block order (prefill).
+
+    The unrolled epilogue (column order) applies to the 16x64/32x64/64x64 reuse
+    kernels; 16x16 packed kernels have a single accumulator and do not spill.
+    """
     tiles = (tiles or MENU_TILES)[phase]
+    reuse = [t for t in tiles if t != "16x16"]
     if phase == "decode":
         # One-row GEMMs have a single row tile, so block order cannot matter; the
         # trim kernels (column order) skip the all-zero A fragment registers.
         return [software_for(phase, t) for t in tiles] + [
-            software_for(phase, t, order="col", epilogue="trim") for t in tiles if t != "16x16"
+            software_for(phase, t, order="col", epilogue=e)
+            for e in ("trim", "unrolled")
+            for t in reuse
         ]
     return [
         software_for(phase, t, packed_pv=pv, order=order)
         for order in ("col", "row")
         for pv in (True, False)
         for t in tiles
+    ] + [
+        software_for(phase, t, packed_pv=pv, order="col", epilogue="unrolled")
+        for pv in (True, False)
+        for t in reuse
     ]
 
 
@@ -142,6 +155,18 @@ def variant_of(software, phase=None):
         labels.append("order=" + software["block_order"])
     if software.get("epilogue", "direct") != "direct":
         labels.append("epilogue=" + software["epilogue"])
+    if software.get("fuse_swiglu"):
+        labels.append("fuse_swiglu")
+    tpw = software.get("tiles_per_warp", 1)
+    if tpw != 1:
+        labels.append(
+            "tpw="
+            + (
+                "/".join(f"{k}:{v}" for k, v in sorted(tpw.items()))
+                if isinstance(tpw, dict)
+                else str(tpw)
+            )
+        )
     return ",".join(labels)
 
 

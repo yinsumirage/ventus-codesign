@@ -201,10 +201,21 @@ def k_cast(mem, items, x, out, count):
 
 
 def k_pack_a(mem, items, a, out, m, k):
-    kt, mt = -(-k // 16), -(-m // 16)
     src = from_bf16(mem.u16(a, m * k)).reshape(m, k) if m * k else None
+    _pack_tiles(mem, items, to_bf16(src), out, m, k)
+
+
+def k_swiglu_pack(mem, items, g, u, out, m, k):
+    gv = from_bf16(mem.u16(g, m * k))
+    silu = from_bf16(to_bf16(gv / (1 + np.exp(-gv))))
+    glu = to_bf16(silu * from_bf16(mem.u16(u, m * k))).reshape(m, k)
+    _pack_tiles(mem, items, glu, out, m, k)
+
+
+def _pack_tiles(mem, items, bits, out, m, k):
+    kt, mt = -(-k // 16), -(-m // 16)
     pad = np.zeros((mt * 16, kt * 16), dtype=np.uint16)
-    pad[:m, :k] = to_bf16(src)
+    pad[:m, :k] = bits
     tiles = pad.reshape(mt, 16, kt, 16).transpose(0, 2, 1, 3).reshape(-1)
     # One warp per 16x16 tile; launched tiles beyond m*k tail are still written.
     count = (items // 32) * 256
@@ -323,6 +334,7 @@ KERNELS = {
     "packed_swiglu_bf16": k_swiglu,
     "cast_bf16_f32": k_cast,
     "pack_a_bf16": k_pack_a,
+    "swiglu_pack_bf16": k_swiglu_pack,
     "mma_packed_bf16": k_mma_packed,
     "mma_reuse_bf16": k_mma_reuse,
     "mma_packed_ncol_bf16": k_mma_packed_ncol,
@@ -333,6 +345,29 @@ KERNELS = {
     "mma_trim_bf16": lambda *args: k_mma_reuse(*args, column_order=True),
     "mma_m64_bf16": lambda mem, items, a, b, bias, out, m, n, k, hb: k_mma_m64(
         mem, items, a, b, bias, out, m, n, k, hb
+    ),
+    # Unrolled epilogues: same outputs, stores no longer go through the private stack.
+    "mma_trimu_bf16": lambda *args: k_mma_reuse(*args, column_order=True),
+    "mma_m64u_bf16": lambda mem, items, a, b, bias, out, m, n, k, hb: k_mma_m64(
+        mem, items, a, b, bias, out, m, n, k, hb
+    ),
+    # Multi-tile kernels compute every tile whatever the launched warp count.
+    "mma_trimm_bf16": lambda mem, items, a, b, bias, out, m, n, k, hb, two_m: k_mma_reuse(
+        mem,
+        -(-m // (32 if two_m else 16)) * (n // 64) * 32,
+        a,
+        b,
+        bias,
+        out,
+        m,
+        n,
+        k,
+        hb,
+        two_m,
+        column_order=True,
+    ),
+    "mma_m64m_bf16": lambda mem, items, a, b, bias, out, m, n, k, hb: k_mma_m64(
+        mem, -(-m // 64) * (n // 64) * 32, a, b, bias, out, m, n, k, hb
     ),
     "addmm_mma_bf16": k_addmm,
 }
