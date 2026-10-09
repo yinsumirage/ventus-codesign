@@ -25,6 +25,11 @@ Compared with iteration 1's complete simulations: A unchanged (0.367), B
 0.313 → 0.279, C 0.378 → 0.367. Speedups against the frozen baseline:
 A 2.73×, B 3.58×, C 2.73×.
 
+![Cycle-area and prefill-decode trade-off](tradeoffs.png)
+
+Stars and triangles use v2 slices ([report](report/tables.md)); the background points are
+every v1-sliced design of the search ([plot.py](plot.py); [PDF](tradeoffs.pdf), [SVG](tradeoffs.svg)).
+
 Software per scenario ([designs/](designs/)): prefill uses sharing, GQA batching,
 packed PV and the column-order GEMM kernels (32×64 tiles); decode uses sharing,
 GQA batching, fusion and the new **trim** GEMM kernel.
