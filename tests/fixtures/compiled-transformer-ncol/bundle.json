@@ -29,5 +29,9 @@
   "ncol_sha256": "c4a1e7694fbb67e387762d270a168a7b0afa1d21671bcef0e414b6730b39b2f0",
   "ncol_source": "examples/kernels/mma_reuse_ncol_bf16.cl",
   "ncol_source_sha256": "e0a504a6bdacabac9353e8a329cbe0416274c96753cd8ed6eaf58e1a1e15fbed",
-  "ncol_toolchain_check": "same local LLVM build recompiled mma_reuse_bf16.cl and mma_packed_bf16.cl to the frozen reuse.elf/packed.elf bytes"
+  "ncol_toolchain_check": "same local LLVM build recompiled mma_reuse_bf16.cl and mma_packed_bf16.cl to the frozen reuse.elf/packed.elf bytes",
+  "stage": "stage.elf",
+  "stage_sha256": "ae2b712e852b2fc3e2a108b4fb259c3f680c68a8b87743bc008579e46df36d2b",
+  "stage_source": "examples/kernels/mma_stage_bf16.cl",
+  "stage_source_sha256": "52a5e1b8134e8e3986b401c1e34576421572fa95d0057f26562f35dc86fef636"
 }

@@ -16,7 +16,7 @@ ALL = dict(share_packing=True, gqa_batch=True, fuse_rows1=True, packed_attention
 
 def build(tmp_path, name, phase, context, software=None, steps=2):
     out = tmp_path / name
-    col = (software or {}).get("block_order") == "col"
+    col = (software or {}).get("block_order") == "col"  # ncol bundle also holds stage
     qwen_manifest(
         NCOL if col else BUNDLE,
         out,
@@ -52,6 +52,7 @@ def test_empty_options_keep_packed64_dispatches(tmp_path):
         (32, dict(share_packing=True, gqa_batch=True, packed_pv=True)),
         (64, dict(packed_pv=True, tiles={"pv": "16x16", "qk": "16x16"})),
         (32, dict(ALL, block_order="col")),
+        (32, dict(ALL, block_order="col", epilogue="lds")),
         (64, dict(ALL, block_order="col", tiles={"gate": "16x16", "o": "16x64", "qk": "32x64"})),
     ],
 )
@@ -73,6 +74,8 @@ def test_prefill_options_preserve_logits_and_kv(tmp_path, context, software):
         dict(ALL, tiles={"qkv": "16x16", "gate_up": "16x64", "lm_head": "16x16"}),
         dict(gqa_batch=True),
         dict(ALL, block_order="col", tiles={"qkv": "16x16"}),
+        dict(ALL, block_order="col", epilogue="lds"),
+        dict(ALL, block_order="col", epilogue="trim"),
     ],
 )
 def test_decode_options_preserve_logits_and_kv(tmp_path, software):
@@ -140,3 +143,69 @@ def test_column_order_bundle_reuses_frozen_elves_and_compiled_resources():
         elf.resources["mma_packed_ncol_bf16"]["vgpr"],
         elf.resources["mma_packed_ncol_bf16"]["sgpr"],
     ) == (33, 11)
+
+
+def _store_trace(kind, kernel, m, n, k, two_m):
+    """Global/LDS store addresses of one compiled GEMM launch (dynamic trace)."""
+    from codesign.ventus.config import Hardware
+    from codesign.ventus.elf import ELFProgram
+    from codesign.ventus.model_program import TARGET
+    from codesign.ventus.rust import KINDS, RustSession
+
+    bundle = json.loads(NCOL.read_text())
+    elf = ELFProgram.read(NCOL.parent / bundle[kind])
+    out = 0x90030000
+    if kernel == "mma_packed_ncol_bf16":
+        args, blocks = [0x90000000, 0x90010000, 0, out, m, n, k, 0], -(-m // 16) * -(-n // 16)
+    else:
+        rows = 32 if two_m else 16
+        args = [0x90000000, 0x90010000, 0, out, m, n, k, 0, two_m]
+        if kernel == "mma_stage_bf16":
+            args.append(128)  # LDS offset: the ABI adds the LDS base
+        blocks = -(-m // rows) * (n // 64)
+    launch = elf.launch(kernel, args, global_size=(blocks * 32, 1, 1))
+    with RustSession(Hardware(), instruction_target=TARGET) as session:
+        data = list(session.generate(elf.words, launch).data)
+    at, stores = 6, []
+    for _ in range(data[1]):
+        kind_id, _, _, nw, ns, na, nd, width = data[at : at + 8]
+        at += 8 + int(data[0] == 0x56545339)
+        at += nw + ns
+        addresses = data[at : at + na]
+        at += na + nd
+        if KINDS[kind_id] == "store":
+            stores.append((addresses, width))
+    return out, stores
+
+
+@pytest.mark.parametrize(
+    "kind,kernel,m,two_m",
+    [
+        ("stage", "mma_stage_bf16", 20, 1),
+        ("stage", "mma_stage_bf16", 20, 0),
+        ("stage", "mma_stage_bf16", 1, 0),
+        ("stage", "mma_trim_bf16", 20, 1),
+        ("stage", "mma_trim_bf16", 1, 0),
+        ("ncol", "mma_reuse_ncol_bf16", 20, 1),
+        ("ncol", "mma_packed_ncol_bf16", 20, 0),
+    ],
+)
+def test_compiled_gemm_stores_cover_output_exactly_once(kind, kernel, m, two_m):
+    n, k = 128, 40
+    out, stores = _store_trace(kind, kernel, m, n, k, two_m)
+    written = []
+    for addresses, width in stores:
+        # 0x6xxxxxxx is the per-thread private stack (compiler spills), 0x7xxxxxxx LDS.
+        lds = [a for a in addresses if 0x70000000 <= a < 0x80000000]
+        glob = [a for a in addresses if not 0x60000000 <= a < 0x80000000]
+        # LDS holds the compiler stack (< 64 B from the base) and the 256 B stage buffer.
+        stack = [a for a in lds if a + width <= 0x70000000 + 64]
+        assert all(
+            0x70000000 + 128 <= a and a + width <= 0x70000000 + 384 for a in lds if a not in stack
+        )
+        for a in glob:
+            written.extend(range(a, a + width))
+        if kernel == "mma_stage_bf16" and glob:
+            # Every staged global store writes inside a single 128 B line.
+            assert len({a // 128 for a in glob}) == 1
+    assert sorted(written) == list(range(out, out + m * n * 2))

@@ -83,9 +83,9 @@ def test_software_for_matches_cached_programs_and_labels():
     # Fusion cannot change prefill programs, packed PV cannot change decode programs.
     assert qs.variant_of(qs.S1, "prefill") == "gqa_batch,share_packing"
     assert qs.variant_of(qs.S1, "decode") == "fuse_rows1,gqa_batch,share_packing"
-    assert (
-        len(qs.phase_menu("prefill", qs.TILES)) == 12
-        and len(qs.phase_menu("decode", qs.TILES)) == 2
-    )
+    assert len(qs.phase_menu("prefill", qs.TILES)) == 12
+    assert len(qs.phase_menu("decode", qs.TILES)) == 3
+    trim = qs.software_for("decode", "16x64", order="col", epilogue="trim")
+    assert qs.variant_of(trim, "decode").endswith("epilogue=trim")
     col = qs.software_for("prefill", "32x64", order="col")
     assert col["block_order"] == "col" and qs.variant_of(col, "prefill").endswith("order=col")

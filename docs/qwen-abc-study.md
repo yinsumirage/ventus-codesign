@@ -16,6 +16,7 @@ claims; nothing here is an RTL or silicon measurement.
 |---|---|
 | `codesign/ventus/model_program.py` | `software=` options extending packed64 (default `None` keeps the original program) |
 | `examples/kernels/mma_reuse_ncol_bf16.cl` | column-strip block order variants of the reuse and packed GEMM kernels |
+| `examples/kernels/mma_stage_bf16.cl` | `mma_trim_bf16` (A-fragment trim) and `mma_stage_bf16` (trim + LDS-staged epilogue) |
 | `tests/fixtures/compiled-transformer-ncol/` | the frozen four ELFs plus the compiled column-order ELF and its receipt |
 | `codesign/ventus/qwen_study.py` | sliced evaluator, legality (area, compiled residency), append-only slice cache |
 | `codesign/ventus/qwen_search.py` | surrogate features, ridge fit, HiGHS MIP with unified area rows |
@@ -36,6 +37,7 @@ claims; nothing here is an RTL or silicon measurement.
 | `packed_attention` | additionally QK over K tiles (element transpose); kept for the record | prefill |
 | `tiles` | per GEMM class: `16x16`, `16x64`, `32x64` | both |
 | `block_order` | `col` uses the compiled column-order kernels (needs the ncol bundle) | both |
+| `epilogue` | `trim`: column-order kernel that loads only the non-zero A fragment register for m ≤ 4; `lds`: additionally stages outputs through LDS for full-line stores (both need `col`) | both |
 
 The network, BF16 storage, FP32 accumulation and semantics are unchanged; every
 layout conversion is a timed dispatch. The NumPy replay compares logits and
@@ -49,10 +51,14 @@ reproduce the frozen ELF bytes.
 
 ## Sliced evaluation
 
-One scenario estimate simulates, each cold in its own session, (1) the prologue,
-all dispatches of layer 0 and the epilogue, scaling layer 0 by 24, and (2) the
-LM-head GEMM, whose work is identical in all four scenarios. Decode uses step 8 of
-16 and reports the per-step mean. Completed full simulations check the estimate
+Estimator v1 simulates, each cold in its own session, (1) the prologue, all
+dispatches of layer 0 and the epilogue, scaling layer 0 by 24, and (2) the LM-head
+GEMM, whose work is identical in all four scenarios. Decode uses step 8 of 16 and
+reports the per-step mean. Estimator v2 (`QWEN_STUDY_ESTIMATOR=v2`, default) samples
+layers 0–2 for P128 and decode, and replays the previous decode step's tail (last
+layer, final norm, LM head) before step 8 so caches carry continuous-decode state;
+its LM head is part of the decode slice. Searches used v1 (largest sample base);
+final comparisons use v2 and complete simulations. Completed full simulations check the estimate
 (evidence README). Every sliced dispatch checks its dynamic MMA count against the
 independent shape count.
 

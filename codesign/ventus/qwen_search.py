@@ -83,11 +83,13 @@ S3_PREFILL = dict(
 PHASE_IRRELEVANT = {"prefill": ("fuse_rows1",), "decode": ("packed_attention", "packed_pv")}
 
 
-def software_for(phase, tile, packed_pv=True, order="row"):
-    """Uniform phase tile (+ prefill packed PV, block order) -> software options."""
+def software_for(phase, tile, packed_pv=True, order="row", epilogue="direct"):
+    """Uniform phase tile (+ prefill packed PV, block order, epilogue) -> software."""
     base = dict(S3_PREFILL) if phase == "prefill" and packed_pv else dict(S1)
     if order != "row":
         base["block_order"] = order
+    if epilogue != "direct":
+        base["epilogue"] = epilogue
     if tile != AUTO_TILE[phase]:
         base["tiles"] = {
             c: tile for c in GEMM_CLASSES[phase] if not (c == "lm_head" and tile == "16x64")
@@ -104,8 +106,11 @@ def phase_menu(phase, tiles=None):
     """Joint-search software menu: tiles x packed PV x block order (prefill)."""
     tiles = (tiles or MENU_TILES)[phase]
     if phase == "decode":
-        # One-row GEMMs have a single row tile, so block order cannot matter.
-        return [software_for(phase, t) for t in tiles]
+        # One-row GEMMs have a single row tile, so block order cannot matter; the
+        # trim kernels (column order) skip the all-zero A fragment registers.
+        return [software_for(phase, t) for t in tiles] + [
+            software_for(phase, t, order="col", epilogue="trim") for t in tiles if t != "16x16"
+        ]
     return [
         software_for(phase, t, packed_pv=pv, order=order)
         for order in ("col", "row")
@@ -128,6 +133,8 @@ def variant_of(software, phase=None):
     labels = [k for k in sorted(SOFTWARE) if software.get(k) is True and k not in ignore]
     if software.get("block_order", "row") != "row":
         labels.append("order=" + software["block_order"])
+    if software.get("epilogue", "direct") != "direct":
+        labels.append("epilogue=" + software["epilogue"])
     return ",".join(labels)
 
 

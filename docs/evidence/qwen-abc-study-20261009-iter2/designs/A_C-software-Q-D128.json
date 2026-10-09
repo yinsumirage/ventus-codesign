@@ -1,0 +1,1 @@
+{"share_packing": true, "gqa_batch": true, "fuse_rows1": true, "block_order": "col", "epilogue": "trim"}

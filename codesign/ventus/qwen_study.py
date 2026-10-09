@@ -43,6 +43,12 @@ TASKS = {
 LAYERS = 24
 DECODE_STEP = 8  # middle of 16 steps; per-step cycles vary by <0.4% in the baseline
 SAMPLE_LAYER = 0
+# Estimator v2: decode slices first replay the previous step's tail (last layer, final
+# norm, LM head, cast) so caches carry the state a continuous decode run has; the
+# sampled layers then reproduced complete-run layer cycles. Prefill starts cold by
+# definition. Sampled layers are scaled by 24 / count.
+ESTIMATOR = __import__("os").environ.get("QWEN_STUDY_ESTIMATOR", "v2")
+SAMPLE_LAYERS = {"Q-P128": (0, 1, 2), "Q-P512": (0,), "Q-D128": (0, 1, 2), "Q-D512": (0, 1, 2)}
 FIXED = dict(threads=32, line_bytes=128, memory_channels=1, memory_bytes_per_cycle=64)
 FIXED["memory_latency"] = 100
 
@@ -87,14 +93,14 @@ def program(cache, scenario, software):
     return out / "program.json"
 
 
-def classify(name):
-    """Dispatch name -> (part, generic class). Parts: layer, lm, other, skip."""
+def classify(name, layers=(SAMPLE_LAYER,)):
+    """Dispatch name -> (part, generic class, step). Parts: layer, lm, other, skip."""
     step = name.split(".")[0]
     rest = name[len(step) + 1 :]
     m = re.match(r"layer(\d+)\.(.*)", rest)
     if m:
         cls = re.sub(r"(head\d+|kv\d+)\.", "", m.group(2))
-        return ("layer" if int(m.group(1)) == SAMPLE_LAYER else "skip"), cls, step
+        return ("layer" if int(m.group(1)) in layers else "skip"), cls, step
     if rest.startswith("lm_head"):
         return "lm", rest, step
     return "other", rest, step
@@ -111,6 +117,29 @@ def slices(raw, scenario):
             continue
         parts["lm" if part == "lm" else "body"].append(d)
     return parts
+
+
+def slices_v2(raw, scenario):
+    """Estimator v2 slices: decode bodies include their warm-up and their LM head."""
+    phase = SCENARIOS[scenario][0]
+    layers = SAMPLE_LAYERS[scenario]
+    if phase == "prefill":
+        parts = {"body": [], "lm": []}
+        for d in raw["dispatches"]:
+            part, _, _ = classify(d["name"], layers)
+            if part != "skip":
+                parts["lm" if part == "lm" else "body"].append(d)
+        return parts
+    want, previous = f"decode{DECODE_STEP:02}", f"decode{DECODE_STEP - 1:02}"
+    warm, body = [], []
+    for d in raw["dispatches"]:
+        part, _, step = classify(d["name"], layers)
+        if step == previous and (part != "skip" or d["name"].startswith(previous + ".layer23.")):
+            if not d["name"].startswith(previous + ".layer0") and "embedding" not in d["name"]:
+                warm.append(d)
+        elif step == want and part != "skip":
+            body.append(d)
+    return {"body": warm + body}
 
 
 def launch_resources(raw, root, dispatches):
@@ -186,12 +215,18 @@ class Study:
                 self.db[row["key"]] = row
 
     def part_key(self, hw, scenario, software, part):
+        if ESTIMATOR == "v2" and part == "body":
+            return digest(
+                dict(hw=hw, scenario=scenario, software=software, part=part, estimator="v2")
+            )
         # LM-head work is identical for every scenario (one row, same weights).
         lm_tile = software.get("tiles", {}).get("lm_head")
         if part == "lm":
             key = dict(hw=hw, part="lm", lm_tile=lm_tile)
             if software.get("block_order", "row") != "row":
                 key["block_order"] = software["block_order"]
+            if software.get("epilogue", "direct") != "direct":
+                key["epilogue"] = software["epilogue"]
             return digest(key)
         return digest(dict(hw=hw, scenario=scenario, software=software, part=part))
 
@@ -199,7 +234,8 @@ class Study:
         """Pending (key, scenario, part) units for this design."""
         pending = {}
         for scenario in scenarios:
-            for part in ("body", "lm"):
+            decode_v2 = ESTIMATOR == "v2" and SCENARIOS[scenario][0] == "decode"
+            for part in ("body",) if decode_v2 else ("body", "lm"):
                 key = self.part_key(hw, scenario, software, part)
                 if key not in self.db and key not in pending:
                     pending[key] = (hw, scenario, software, part)
@@ -223,17 +259,23 @@ class Study:
     def estimate(self, hw, software, scenario):
         """Scenario cycles from cached slices; None while a slice is missing."""
         body = self.db.get(self.part_key(hw, scenario, software, "body"))
-        lm = self.db.get(self.part_key(hw, scenario, software, "lm"))
-        if body is None or lm is None:
+        decode_v2 = ESTIMATOR == "v2" and SCENARIOS[scenario][0] == "decode"
+        lm = None if decode_v2 else self.db.get(self.part_key(hw, scenario, software, "lm"))
+        if body is None or (lm is None and not decode_v2):
             return None
+        layers = SAMPLE_LAYERS[scenario] if ESTIMATOR == "v2" else (SAMPLE_LAYER,)
+        want = "prefill" if SCENARIOS[scenario][0] == "prefill" else f"decode{DECODE_STEP:02}"
         classes = {}
         total = 0
-        for r in body["rows"] + lm["rows"]:
-            part, cls, _ = classify(r["name"])
-            scale = LAYERS if part == "layer" else 1
+        lm_rows = lm["rows"] if lm else []
+        for r in body["rows"] + lm_rows:
+            part, cls, step = classify(r["name"], layers)
+            if decode_v2 and step != want:
+                continue  # warm-up dispatches of the previous decode step
+            scale = LAYERS / len(layers) if part == "layer" else 1
             total += r["cycles"] * scale
             classes[cls] = classes.get(cls, 0) + r["cycles"] * scale
-        return dict(cycles=total, classes=classes)
+        return dict(cycles=total, classes=classes, estimator=ESTIMATOR)
 
 
 def run_job(args):
@@ -248,6 +290,8 @@ def run_job(args):
         path = program(cache, "Q-P128", software)
         raw = json.loads(path.read_text())
         dispatches = slices(raw, "Q-P128")["lm"]
+    elif ESTIMATOR == "v2":
+        dispatches = slices_v2(raw, scenario)["body"]
     else:
         dispatches = slices(raw, scenario)["body"]
     begin = perf_counter()

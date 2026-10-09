@@ -313,6 +313,10 @@ KERNELS = {
     "mma_reuse_bf16": k_mma_reuse,
     "mma_packed_ncol_bf16": k_mma_packed_ncol,
     "mma_reuse_ncol_bf16": lambda *args: k_mma_reuse(*args, column_order=True),
+    # Same outputs as the column-order reuse kernel; LDS staging changes only how
+    # the warp writes them (the compiled store coverage is checked from traces).
+    "mma_stage_bf16": lambda *args: k_mma_reuse(*args[:-1], column_order=True),
+    "mma_trim_bf16": lambda *args: k_mma_reuse(*args, column_order=True),
     "addmm_mma_bf16": k_addmm,
 }
 

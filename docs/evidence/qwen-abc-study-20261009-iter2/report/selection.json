@@ -1,0 +1,647 @@
+{
+ "A": {
+  "default": {
+   "hardware": {},
+   "menu": {
+    "prefill": [
+     {}
+    ],
+    "decode": [
+     {}
+    ]
+   }
+  },
+  "software-only": {
+   "hardware": {},
+   "menu": {
+    "prefill": [
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": false,
+      "packed_attention": false,
+      "packed_pv": true,
+      "tiles": {},
+      "block_order": "col"
+     },
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": true
+     },
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": true,
+      "block_order": "col"
+     }
+    ],
+    "decode": [
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": true
+     },
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": true,
+      "block_order": "col",
+      "epilogue": "trim"
+     }
+    ]
+   }
+  },
+  "hardware-only": {
+   "hardware": {
+    "blocks_per_sm": 8,
+    "collectors": 4,
+    "l1_mshrs": 16,
+    "l1_sets": 64,
+    "l1_subentries": 1,
+    "l1_ways": 1,
+    "l1_write_entries": 16,
+    "l2_mshrs": 32,
+    "l2_sets": 64,
+    "l2_ways": 4,
+    "lds_banks": 8,
+    "lds_bytes": 16384,
+    "lds_ports": 1,
+    "lsu_entries": 16,
+    "lsu_per_warp": 4,
+    "rf_banks": 4,
+    "rf_read_ports": 1,
+    "rf_write_ports": 1,
+    "sgpr_slots": 128,
+    "sms": 3,
+    "tensor_k": 2,
+    "tensor_m": 2,
+    "tensor_n": 16,
+    "tensor_units": 1,
+    "vgpr_slots": 512,
+    "warps_per_sm": 8,
+    "writeback_ports": 1
+   },
+   "menu": {
+    "prefill": [
+     {}
+    ],
+    "decode": [
+     {}
+    ]
+   }
+  },
+  "sequential": {
+   "hardware": {
+    "blocks_per_sm": 8,
+    "collectors": 4,
+    "l1_mshrs": 16,
+    "l1_sets": 64,
+    "l1_subentries": 1,
+    "l1_ways": 1,
+    "l1_write_entries": 16,
+    "l2_mshrs": 32,
+    "l2_sets": 64,
+    "l2_ways": 4,
+    "lds_banks": 8,
+    "lds_bytes": 16384,
+    "lds_ports": 1,
+    "lsu_entries": 16,
+    "lsu_per_warp": 4,
+    "rf_banks": 4,
+    "rf_read_ports": 1,
+    "rf_write_ports": 1,
+    "sgpr_slots": 256,
+    "sms": 3,
+    "tensor_k": 2,
+    "tensor_m": 2,
+    "tensor_n": 16,
+    "tensor_units": 1,
+    "vgpr_slots": 512,
+    "warps_per_sm": 8,
+    "writeback_ports": 1
+   },
+   "menu": {
+    "prefill": [
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": false,
+      "packed_attention": false,
+      "packed_pv": true,
+      "tiles": {},
+      "block_order": "col"
+     }
+    ],
+    "decode": [
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": true,
+      "block_order": "col",
+      "epilogue": "trim"
+     }
+    ]
+   }
+  },
+  "joint": {
+   "hardware": {
+    "blocks_per_sm": 8,
+    "collectors": 4,
+    "l1_mshrs": 16,
+    "l1_sets": 64,
+    "l1_subentries": 1,
+    "l1_ways": 1,
+    "l1_write_entries": 16,
+    "l2_mshrs": 32,
+    "l2_sets": 64,
+    "l2_ways": 4,
+    "lds_banks": 8,
+    "lds_bytes": 16384,
+    "lds_ports": 1,
+    "lsu_entries": 16,
+    "lsu_per_warp": 4,
+    "rf_banks": 4,
+    "rf_read_ports": 1,
+    "rf_write_ports": 1,
+    "sgpr_slots": 256,
+    "sms": 3,
+    "tensor_k": 2,
+    "tensor_m": 2,
+    "tensor_n": 16,
+    "tensor_units": 1,
+    "vgpr_slots": 512,
+    "warps_per_sm": 8,
+    "writeback_ports": 1
+   },
+   "menu": {
+    "prefill": [
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": false,
+      "packed_attention": false,
+      "packed_pv": true,
+      "tiles": {},
+      "block_order": "col"
+     },
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": true
+     },
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": true,
+      "block_order": "col"
+     }
+    ],
+    "decode": [
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": true
+     },
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": true,
+      "block_order": "col",
+      "epilogue": "trim"
+     }
+    ]
+   }
+  }
+ },
+ "B": {
+  "default": {
+   "hardware": {},
+   "menu": {
+    "prefill": [
+     {}
+    ],
+    "decode": [
+     {}
+    ]
+   }
+  },
+  "software-only": {
+   "hardware": {},
+   "menu": {
+    "prefill": [
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": false,
+      "packed_attention": false,
+      "packed_pv": true,
+      "tiles": {},
+      "block_order": "col"
+     },
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": true
+     },
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": true,
+      "block_order": "col"
+     }
+    ],
+    "decode": [
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": true
+     },
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": true,
+      "block_order": "col",
+      "epilogue": "trim"
+     }
+    ]
+   }
+  },
+  "hardware-only": {
+   "hardware": {
+    "blocks_per_sm": 8,
+    "collectors": 8,
+    "l1_mshrs": 16,
+    "l1_sets": 256,
+    "l1_subentries": 2,
+    "l1_ways": 2,
+    "l1_write_entries": 16,
+    "l2_mshrs": 32,
+    "l2_sets": 256,
+    "l2_ways": 16,
+    "lds_banks": 8,
+    "lds_bytes": 16384,
+    "lds_ports": 1,
+    "lsu_entries": 16,
+    "lsu_per_warp": 8,
+    "rf_banks": 4,
+    "rf_read_ports": 1,
+    "rf_write_ports": 1,
+    "sgpr_slots": 256,
+    "sms": 2,
+    "tensor_k": 2,
+    "tensor_m": 2,
+    "tensor_n": 16,
+    "tensor_units": 1,
+    "vgpr_slots": 1024,
+    "warps_per_sm": 8,
+    "writeback_ports": 1
+   },
+   "menu": {
+    "prefill": [
+     {}
+    ],
+    "decode": [
+     {}
+    ]
+   }
+  },
+  "sequential": {
+   "hardware": {
+    "blocks_per_sm": 8,
+    "collectors": 8,
+    "l1_mshrs": 16,
+    "l1_sets": 128,
+    "l1_subentries": 1,
+    "l1_ways": 4,
+    "l1_write_entries": 16,
+    "l2_mshrs": 32,
+    "l2_sets": 256,
+    "l2_ways": 16,
+    "lds_banks": 8,
+    "lds_bytes": 16384,
+    "lds_ports": 1,
+    "lsu_entries": 16,
+    "lsu_per_warp": 8,
+    "rf_banks": 4,
+    "rf_read_ports": 1,
+    "rf_write_ports": 1,
+    "sgpr_slots": 128,
+    "sms": 2,
+    "tensor_k": 2,
+    "tensor_m": 2,
+    "tensor_n": 16,
+    "tensor_units": 1,
+    "vgpr_slots": 1024,
+    "warps_per_sm": 8,
+    "writeback_ports": 1
+   },
+   "menu": {
+    "prefill": [
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": false,
+      "packed_attention": false,
+      "packed_pv": true,
+      "tiles": {},
+      "block_order": "col"
+     }
+    ],
+    "decode": [
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": true,
+      "block_order": "col",
+      "epilogue": "trim"
+     }
+    ]
+   }
+  },
+  "joint": {
+   "hardware": {
+    "blocks_per_sm": 8,
+    "collectors": 8,
+    "l1_mshrs": 16,
+    "l1_sets": 128,
+    "l1_subentries": 1,
+    "l1_ways": 4,
+    "l1_write_entries": 16,
+    "l2_mshrs": 32,
+    "l2_sets": 256,
+    "l2_ways": 16,
+    "lds_banks": 8,
+    "lds_bytes": 16384,
+    "lds_ports": 1,
+    "lsu_entries": 16,
+    "lsu_per_warp": 8,
+    "rf_banks": 4,
+    "rf_read_ports": 1,
+    "rf_write_ports": 1,
+    "sgpr_slots": 128,
+    "sms": 2,
+    "tensor_k": 2,
+    "tensor_m": 2,
+    "tensor_n": 16,
+    "tensor_units": 1,
+    "vgpr_slots": 1024,
+    "warps_per_sm": 8,
+    "writeback_ports": 1
+   },
+   "menu": {
+    "prefill": [
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": false,
+      "packed_attention": false,
+      "packed_pv": true,
+      "tiles": {},
+      "block_order": "col"
+     },
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": true
+     },
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": true,
+      "block_order": "col"
+     }
+    ],
+    "decode": [
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": true
+     },
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": true,
+      "block_order": "col",
+      "epilogue": "trim"
+     }
+    ]
+   }
+  }
+ },
+ "C": {
+  "default": {
+   "hardware": {},
+   "menu": {
+    "prefill": [
+     {}
+    ],
+    "decode": [
+     {}
+    ]
+   }
+  },
+  "software-only": {
+   "hardware": {},
+   "menu": {
+    "prefill": [
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": false,
+      "packed_attention": false,
+      "packed_pv": true,
+      "tiles": {},
+      "block_order": "col"
+     },
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": true
+     },
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": true,
+      "block_order": "col"
+     }
+    ],
+    "decode": [
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": true
+     },
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": true,
+      "block_order": "col",
+      "epilogue": "trim"
+     }
+    ]
+   }
+  },
+  "hardware-only": {
+   "hardware": {
+    "blocks_per_sm": 8,
+    "collectors": 4,
+    "l1_mshrs": 16,
+    "l1_sets": 64,
+    "l1_subentries": 1,
+    "l1_ways": 1,
+    "l1_write_entries": 16,
+    "l2_mshrs": 32,
+    "l2_sets": 64,
+    "l2_ways": 4,
+    "lds_banks": 8,
+    "lds_bytes": 16384,
+    "lds_ports": 1,
+    "lsu_entries": 16,
+    "lsu_per_warp": 4,
+    "rf_banks": 4,
+    "rf_read_ports": 1,
+    "rf_write_ports": 1,
+    "sgpr_slots": 128,
+    "sms": 3,
+    "tensor_k": 2,
+    "tensor_m": 2,
+    "tensor_n": 16,
+    "tensor_units": 1,
+    "vgpr_slots": 512,
+    "warps_per_sm": 8,
+    "writeback_ports": 1
+   },
+   "menu": {
+    "prefill": [
+     {}
+    ],
+    "decode": [
+     {}
+    ]
+   }
+  },
+  "sequential": {
+   "hardware": {
+    "blocks_per_sm": 8,
+    "collectors": 4,
+    "l1_mshrs": 16,
+    "l1_sets": 64,
+    "l1_subentries": 1,
+    "l1_ways": 1,
+    "l1_write_entries": 16,
+    "l2_mshrs": 32,
+    "l2_sets": 64,
+    "l2_ways": 4,
+    "lds_banks": 8,
+    "lds_bytes": 16384,
+    "lds_ports": 1,
+    "lsu_entries": 16,
+    "lsu_per_warp": 4,
+    "rf_banks": 4,
+    "rf_read_ports": 1,
+    "rf_write_ports": 1,
+    "sgpr_slots": 256,
+    "sms": 3,
+    "tensor_k": 2,
+    "tensor_m": 2,
+    "tensor_n": 16,
+    "tensor_units": 1,
+    "vgpr_slots": 512,
+    "warps_per_sm": 8,
+    "writeback_ports": 1
+   },
+   "menu": {
+    "prefill": [
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": false,
+      "packed_attention": false,
+      "packed_pv": true,
+      "tiles": {},
+      "block_order": "col"
+     }
+    ],
+    "decode": [
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": true,
+      "block_order": "col",
+      "epilogue": "trim"
+     }
+    ]
+   }
+  },
+  "joint": {
+   "hardware": {
+    "blocks_per_sm": 8,
+    "collectors": 4,
+    "l1_mshrs": 16,
+    "l1_sets": 64,
+    "l1_subentries": 1,
+    "l1_ways": 1,
+    "l1_write_entries": 16,
+    "l2_mshrs": 32,
+    "l2_sets": 64,
+    "l2_ways": 4,
+    "lds_banks": 8,
+    "lds_bytes": 16384,
+    "lds_ports": 1,
+    "lsu_entries": 16,
+    "lsu_per_warp": 4,
+    "rf_banks": 4,
+    "rf_read_ports": 1,
+    "rf_write_ports": 1,
+    "sgpr_slots": 256,
+    "sms": 3,
+    "tensor_k": 2,
+    "tensor_m": 2,
+    "tensor_n": 16,
+    "tensor_units": 1,
+    "vgpr_slots": 512,
+    "warps_per_sm": 8,
+    "writeback_ports": 1
+   },
+   "menu": {
+    "prefill": [
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": false,
+      "packed_attention": false,
+      "packed_pv": true,
+      "tiles": {},
+      "block_order": "col"
+     },
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": true
+     },
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": true,
+      "block_order": "col"
+     }
+    ],
+    "decode": [
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": true
+     },
+     {
+      "share_packing": true,
+      "gqa_batch": true,
+      "fuse_rows1": true,
+      "block_order": "col",
+      "epilogue": "trim"
+     }
+    ]
+   }
+  }
+ }
+}
