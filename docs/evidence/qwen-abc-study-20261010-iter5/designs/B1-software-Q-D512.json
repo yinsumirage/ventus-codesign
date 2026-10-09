@@ -1,0 +1,1 @@
+{"share_packing": true, "gqa_batch": true, "fuse_rows1": true, "block_order": "col", "epilogue": "unrolled", "fuse_swiglu": true, "tiles_per_warp": {"gate_up": 2, "lm_head": 8}}
