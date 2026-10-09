@@ -1,0 +1,9 @@
+{
+  "share_packing": true,
+  "gqa_batch": true,
+  "fuse_rows1": false,
+  "packed_attention": false,
+  "packed_pv": true,
+  "tiles": {},
+  "block_order": "col"
+}

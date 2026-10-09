@@ -101,13 +101,61 @@ class Allocator:
         return address
 
 
-def qwen_manifest(bundle_path, out, *, phase, context, steps=16, small=False, mapping="packed"):
+GEMM_TILES = ("16x16", "16x64", "32x64")
+GEMM_CLASSES = ("q", "k", "v", "qkv", "o", "gate", "up", "gate_up", "down", "lm_head", "qk", "pv")
+SWITCHES = ("share_packing", "gqa_batch", "fuse_rows1", "packed_attention", "packed_pv")
+SOFTWARE_DEFAULTS = dict(tiles={}, block_order="row", **dict.fromkeys(SWITCHES, False))
+
+
+def software_options(software):
+    """Explicit packed64 extensions; None keeps the original packed64 organization.
+
+    tiles: GEMM class -> output tile per warp ("16x16" packed, "16x64"/"32x64" reuse).
+    share_packing: pack an activation once for consecutive GEMMs reading it (q/k/v, gate/up).
+    gqa_batch: one QK and one PV GEMM per KV head over its stacked query heads.
+    fuse_rows1: single-row (decode) QKV and gate/up GEMMs over concatenated weights.
+    packed_attention: multi-row (prefill) QK/PV use packed MMA kernels; K and V are
+        rearranged into MMA B tiles by transpose_append dispatches (timed).
+    packed_pv: multi-row PV only uses packed MMA over V B tiles (one chunk-copy
+        dispatch per KV head); QK keeps the strided official kernel.
+    block_order: "row" (row tiles outer) or "col" (column strips outer; needs the
+        bundle's compiled ncol kernels). Tiles, registers and MMA sequence are unchanged.
+    """
+    options = {**SOFTWARE_DEFAULTS, **(software or {})}
+    if set(options) != set(SOFTWARE_DEFAULTS):
+        raise ValueError("unknown software option")
+    tiles = options["tiles"]
+    if not isinstance(tiles, dict) or any(
+        k not in GEMM_CLASSES or v not in GEMM_TILES for k, v in tiles.items()
+    ):
+        raise ValueError("tiles map GEMM classes to 16x16, 16x64 or 32x64")
+    if any(type(options[k]) is not bool for k in SWITCHES):
+        raise ValueError("software switches must be booleans")
+    if options["block_order"] not in ("row", "col"):
+        raise ValueError("block_order is row or col")
+    return options
+
+
+def qwen_manifest(
+    bundle_path,
+    out,
+    *,
+    phase,
+    context,
+    steps=16,
+    small=False,
+    mapping="packed",
+    software=None,
+):
     if phase not in ("prefill", "decode") or type(context) is not int or context < 1:
         raise ValueError("invalid scenario")
     if type(steps) is not int or steps < 1:
         raise ValueError("invalid decode steps")
     if mapping not in ("packed", "packed64", "scalar"):
         raise ValueError("unknown software mapping")
+    if software is not None and mapping != "packed64":
+        raise ValueError("software options extend the packed64 mapping")
+    sw = software_options(software)
     source = ROOT / "examples/models/qwen2.5-0.5b-instruct.config.json"
     frozen = json.loads(source.read_text())
     cfg = dict(frozen)
@@ -143,7 +191,9 @@ def qwen_manifest(bundle_path, out, *, phase, context, steps=16, small=False, ma
     if bundle["schema"] != "ventus-kernel-bundle-v1" or bundle["precision"] != "BF16":
         raise ValueError("incompatible compiled bundle")
     out.mkdir()
-    for kind in ("generic", "mma", "packed", *(["reuse"] if "reuse" in bundle else [])):
+    if sw["block_order"] == "col" and "ncol" not in bundle:
+        raise ValueError("column block order needs a bundle with compiled ncol kernels")
+    for kind in ("generic", "mma", "packed", *[k for k in ("reuse", "ncol") if k in bundle]):
         elf = ELFProgram.read(bundle_path.parent / bundle[kind])
         if elf.sha256 != bundle[kind + "_sha256"]:
             raise ValueError("compiled bundle hash differs")
@@ -152,7 +202,26 @@ def qwen_manifest(bundle_path, out, *, phase, context, steps=16, small=False, ma
     embedding = weights.alloc("embedding=lm_head", [vocab, width])
     freq = weights.alloc("rope_inverse_frequency", [dim // 2], 4)
     per_layer = []
+    # Packed B tiles are N-tile major, so concatenating weights along N concatenates buffers.
+    fused = sw["fuse_rows1"] and phase == "decode"
+    kvd = kvheads * dim
     for layer in range(layers):
+        if fused:
+            w = {
+                "norm1": weights.alloc(f"layer{layer}.norm1", [width]),
+                "norm2": weights.alloc(f"layer{layer}.norm2", [width]),
+                "qkv": weights.alloc(f"layer{layer}.q|k|v", [width + 2 * kvd, width]),
+                "qkvb": weights.alloc(f"layer{layer}.qb|kb|vb", [width + 2 * kvd]),
+                "o": weights.alloc(f"layer{layer}.o", [width, width]),
+                "gate_up": weights.alloc(f"layer{layer}.gate|up", [2 * ff, width]),
+                "down": weights.alloc(f"layer{layer}.down", [width, ff]),
+            }
+            w["q"], w["qb"] = w["qkv"], w["qkvb"]
+            w["k"], w["kb"] = w["qkv"] + width * width * 2, w["qkvb"] + width * 2
+            w["v"], w["vb"] = w["k"] + kvd * width * 2, w["kb"] + kvd * 2
+            w["gate"], w["up"] = w["gate_up"], w["gate_up"] + ff * width * 2
+            per_layer.append(w)
+            continue
         shapes = {
             "norm1": [width],
             "norm2": [width],
@@ -173,6 +242,7 @@ def qwen_manifest(bundle_path, out, *, phase, context, steps=16, small=False, ma
     weight_addresses = {
         embedding,
         *[w[k] for w in per_layer for k in ("q", "k", "v", "o", "gate", "up", "down")],
+        *[w[k] for w in per_layer for k in ("qkv", "gate_up") if k in w],
     }
     for buffer in weights.buffers:
         if mapping in ("packed", "packed64") and buffer["address"] in weight_addresses:
@@ -180,27 +250,45 @@ def qwen_manifest(bundle_path, out, *, phase, context, steps=16, small=False, ma
     finalnorm = weights.alloc("final_norm", [width])
     rows = context if phase == "prefill" else 1
     cap = context if phase == "prefill" else context + steps
-    packed_a = temps.alloc(
-        "packed_activation_scratch", [(rows + 15) // 16, (ff + 15) // 16, 16, 16]
-    )
+    group = heads // kvheads
+    srows = rows * group if sw["gqa_batch"] else rows
+    attention_tiles = sw["packed_attention"] and phase == "prefill"
+    pv_tiles = (sw["packed_attention"] or sw["packed_pv"]) and phase == "prefill"
+    if pv_tiles and (cap % 16 or dim % 16):
+        raise ValueError("packed attention needs 16-multiple context and head width")
+    if pv_tiles:
+        tiles_needed = max(-(-rows // 16) * -(-ff // 16), -(-srows // 16) * -(-max(cap, dim) // 16))
+        packed_a = temps.alloc("packed_activation_scratch", [tiles_needed, 16, 16])
+    else:
+        packed_a = temps.alloc(
+            "packed_activation_scratch", [(rows + 15) // 16, (ff + 15) // 16, 16, 16]
+        )
     tokens = temps.alloc("tokens", [rows], 4)
     x = temps.alloc("hidden", [rows, width])
     y = temps.alloc("normalized", [rows, width])
-    q = temps.alloc("q_projection", [rows, width])
-    k = temps.alloc("k_projection", [rows, kvheads * dim])
-    v = temps.alloc("v_projection", [rows, kvheads * dim])
+    if fused:
+        qkv_out = temps.alloc("q|k|v_projection", [rows, width + 2 * kvd])
+        q, k, v = qkv_out, qkv_out + width * 2, qkv_out + (width + kvd) * 2
+    else:
+        q = temps.alloc("q_projection", [rows, width])
+        k = temps.alloc("k_projection", [rows, kvheads * dim])
+        v = temps.alloc("v_projection", [rows, kvheads * dim])
     qr = temps.alloc("rotated_q", [heads, rows, dim])
     att = temps.alloc("head_attention", [heads, rows, dim])
     joined = temps.alloc("joined_attention", [rows, width])
     proj = temps.alloc("output_projection", [rows, width])
-    gate = temps.alloc("gate", [rows, ff])
-    up = temps.alloc("up", [rows, ff])
+    if fused:
+        gate_up_out = temps.alloc("gate|up", [rows, 2 * ff])
+        gate, up = gate_up_out, gate_up_out + ff * 2
+    else:
+        gate = temps.alloc("gate", [rows, ff])
+        up = temps.alloc("up", [rows, ff])
     glu = temps.alloc("swiglu", [rows, ff])
-    scores = temps.alloc("scores", [rows, cap])
-    prob = temps.alloc("probabilities", [rows, cap])
+    scores = temps.alloc("scores", [srows, cap])
+    prob = temps.alloc("probabilities", [srows, cap])
     logits = temps.alloc("logits_bf16", [vocab])
     logits32 = temps.alloc("logits_fp32", [vocab], 4)
-    softscratch = temps.alloc("softmax_fp32_exponentials", [rows, cap], 4)
+    softscratch = temps.alloc("softmax_fp32_exponentials", [srows, cap], 4)
     caches = [
         (
             temps.alloc(f"layer{layer}.K", [kvheads, cap, dim]),
@@ -208,9 +296,18 @@ def qwen_manifest(bundle_path, out, *, phase, context, steps=16, small=False, ma
         )
         for layer in range(layers)
     ]
+    if attention_tiles:
+        k_transposed = temps.alloc("K_transposed", [dim, kvheads * cap])
+        k_tiles = temps.alloc("K_mma_B_tiles", [kvheads, cap, dim])
+    if pv_tiles:
+        v_tiles = temps.alloc("V_mma_B_tiles", [kvheads, cap, dim])
     dispatches = []
+    packed_source = [None]
 
     def emit(name, kernel, args, items, kind="generic", known=None, check=None):
+        if kind not in ("packed", "reuse", "ncol"):
+            # Any other kernel may rewrite a packed source; never reuse across it.
+            packed_source[0] = None
         elf_hash = bundle[kind + "_sha256"]
         dispatches.append(
             dict(
@@ -227,26 +324,34 @@ def qwen_manifest(bundle_path, out, *, phase, context, steps=16, small=False, ma
             )
         )
 
-    def mm(name, a, b, bias, o, m, n, kdim, astride, bstride, ostride, offset=0):
-        if mapping in ("packed", "packed64") and b in weight_addresses:
+    def mm(name, a, b, bias, o, m, n, kdim, astride, bstride, ostride, offset=0, b_tiles=False):
+        if mapping in ("packed", "packed64") and (b in weight_addresses or b_tiles):
             if astride != (kdim, 1) or ostride != (n, 1) or offset:
                 raise ValueError("packed software mapping requires row-major activation/output")
-            emit(
-                name + ".pack_activation",
-                "pack_a_bf16",
-                [a, packed_a, m, kdim],
-                ((m + 15) // 16) * ((kdim + 15) // 16) * 32,
-                "packed",
-            )
-            if mapping == "packed64" and n % 64 == 0:
-                two_m = int(m >= 32)
+            if not (sw["share_packing"] and packed_source[0] == (a, m, kdim)):
+                emit(
+                    name + ".pack_activation",
+                    "pack_a_bf16",
+                    [a, packed_a, m, kdim],
+                    ((m + 15) // 16) * ((kdim + 15) // 16) * 32,
+                    "packed",
+                )
+            packed_source[0] = (a, m, kdim) if o != a else None
+            tile = sw["tiles"].get(name.rsplit(".", 1)[-1])
+            if tile is None and mapping == "packed64" and n % 64 == 0:
+                tile = "32x64" if m >= 32 else "16x64"
+            if tile in ("16x64", "32x64"):
+                if n % 64 or (tile == "32x64" and m <= 16):
+                    raise ValueError(f"{tile} tile does not apply to {name}")
+                two_m = int(tile == "32x64")
                 mt = 32 if two_m else 16
+                col = sw["block_order"] == "col"
                 emit(
                     name,
-                    "mma_reuse_bf16",
+                    "mma_reuse_ncol_bf16" if col else "mma_reuse_bf16",
                     [packed_a, b, bias, o, m, n, kdim, int(bool(bias)), two_m],
                     ((m + mt - 1) // mt) * (n // 64) * 32,
-                    "reuse",
+                    "ncol" if col else "reuse",
                     check=dict(
                         effective_multiplies=m * n * kdim,
                         mma_instructions=((m + mt - 1) // mt)
@@ -256,12 +361,13 @@ def qwen_manifest(bundle_path, out, *, phase, context, steps=16, small=False, ma
                     ),
                 )
                 return
+            col = sw["block_order"] == "col"
             emit(
                 name,
-                "mma_packed_bf16",
+                "mma_packed_ncol_bf16" if col else "mma_packed_bf16",
                 [packed_a, b, bias, o, m, n, kdim, int(bool(bias))],
                 ((m + 15) // 16) * ((n + 15) // 16) * 32,
-                "packed",
+                "ncol" if col else "packed",
                 check=dict(
                     effective_multiplies=m * n * kdim,
                     mma_instructions=((m + 15) // 16) * ((n + 15) // 16) * ((kdim + 15) // 16),
@@ -328,11 +434,12 @@ def qwen_manifest(bundle_path, out, *, phase, context, steps=16, small=False, ma
                     ],
                     rows * 32,
                 )
-            for name, outbuf, n in [
-                ("q", q, width),
-                ("k", k, kvheads * dim),
-                ("v", v, kvheads * dim),
-            ]:
+            projections = (
+                [("qkv", q, width + 2 * kvd)]
+                if fused
+                else [("q", q, width), ("k", k, kvd), ("v", v, kvd)]
+            )
+            for name, outbuf, n in projections:
                 mm(
                     stem + "." + name,
                     y,
@@ -364,49 +471,117 @@ def qwen_manifest(bundle_path, out, *, phase, context, steps=16, small=False, ma
                 [v, vc, kvheads, dim, rows, cap, pos],
                 rows * kvheads * dim,
             )
-            for h in range(heads):
-                kh = h // (heads // kvheads)
-                mm(
-                    stem + f".head{h:02}.qk",
-                    qr + h * rows * dim * 2,
-                    kc + kh * cap * dim * 2,
-                    0,
-                    scores,
-                    rows,
-                    length,
-                    dim,
-                    (dim, 1),
-                    (1, dim),
-                    (length, 1),
+            if attention_tiles:
+                # K [kv, cap, dim] -> K^T [dim, kv*cap] -> 16-wide chunks in MMA B-tile order.
+                emit(
+                    stem + ".k_transpose",
+                    "transpose_append_bf16",
+                    [kc, k_transposed, dim, 1, kvheads * cap, kvheads * cap, 0],
+                    kvheads * cap * dim,
                 )
                 emit(
-                    stem + f".head{h:02}.softmax",
-                    "causal_softmax_bf16",
-                    [scores, prob, softscratch, rows, length, pos, fbits(dim**-0.5)],
-                    rows * 32,
+                    stem + ".k_tiles",
+                    "transpose_append_bf16",
+                    [k_transposed, k_tiles, kvheads * cap // 16, 16, dim, dim, 0],
+                    kvheads * cap * dim,
                 )
+            if pv_tiles:
+                for kh in range(kvheads):
+                    emit(
+                        stem + f".kv{kh}.v_tiles",
+                        "transpose_append_bf16",
+                        [
+                            vc + kh * cap * dim * 2,
+                            v_tiles + kh * cap * dim * 2,
+                            dim // 16,
+                            16,
+                            cap,
+                            cap,
+                            0,
+                        ],
+                        cap * dim,
+                    )
+            # GQA batching stacks the query heads of one KV head: [group*rows, dim] in qr/att.
+            units = (
+                [(f"kv{kh}", kh, kh * group, group) for kh in range(kvheads)]
+                if sw["gqa_batch"]
+                else [(f"head{h:02}", h // group, h, 1) for h in range(heads)]
+            )
+            for label, kh, h0, count in units:
+                m_att = rows * count
+                if attention_tiles:
+                    qk_b, qk_bstride = k_tiles + kh * cap * dim * 2, None
+                else:
+                    qk_b, qk_bstride = kc + kh * cap * dim * 2, (1, dim)
+                if pv_tiles:
+                    pv_b, pv_bstride = v_tiles + kh * cap * dim * 2, None
+                else:
+                    pv_b, pv_bstride = vc + kh * cap * dim * 2, (dim, 1)
                 mm(
-                    stem + f".head{h:02}.pv",
-                    prob,
-                    vc + kh * cap * dim * 2,
+                    stem + f".{label}.qk",
+                    qr + h0 * rows * dim * 2,
+                    qk_b,
                     0,
-                    att + h * rows * dim * 2,
-                    rows,
+                    scores,
+                    m_att,
+                    length,
+                    dim,
+                    (dim, 1),
+                    qk_bstride,
+                    (length, 1),
+                    b_tiles=attention_tiles,
+                )
+                # Decode rows see every cached column, so one call over stacked heads is
+                # exact; prefill keeps one call per head (the causal mask uses the row).
+                calls = (
+                    [(h0, rows, 0)]
+                    if count == 1
+                    else (
+                        [(h0 + j, rows, j) for j in range(count)]
+                        if rows > 1
+                        else [(None, count, 0)]
+                    )
+                )
+                for head, srow, j in calls:
+                    emit(
+                        stem
+                        + (f".head{head:02}.softmax" if head is not None else f".{label}.softmax"),
+                        "causal_softmax_bf16",
+                        [
+                            scores + j * rows * length * 2,
+                            prob + j * rows * length * 2,
+                            softscratch + j * rows * length * 4,
+                            srow,
+                            length,
+                            pos,
+                            fbits(dim**-0.5),
+                        ],
+                        srow * 32,
+                    )
+                mm(
+                    stem + f".{label}.pv",
+                    prob,
+                    pv_b,
+                    0,
+                    att + h0 * rows * dim * 2,
+                    m_att,
                     dim,
                     length,
                     (length, 1),
+                    pv_bstride,
                     (dim, 1),
-                    (dim, 1),
+                    b_tiles=pv_tiles,
                 )
-            emit(
-                stem + ".join_heads",
-                "heads_to_rows_bf16",
-                [att, joined, heads, dim, rows],
-                rows * width,
-            )
+            if not fused:
+                emit(
+                    stem + ".join_heads",
+                    "heads_to_rows_bf16",
+                    [att, joined, heads, dim, rows],
+                    rows * width,
+                )
             mm(
                 stem + ".o",
-                joined,
+                att if fused else joined,
                 w["o"],
                 0,
                 proj,
@@ -429,7 +604,9 @@ def qwen_manifest(bundle_path, out, *, phase, context, steps=16, small=False, ma
                 [x, w["norm2"], y, width, rows, fbits(cfg["rms_norm_eps"]), fbits(1 / width)],
                 rows * 32,
             )
-            for name, outbuf in [("gate", gate), ("up", up)]:
+            for name, outbuf, n in (
+                [("gate_up", gate, 2 * ff)] if fused else [("gate", gate, ff), ("up", up, ff)]
+            ):
                 mm(
                     stem + "." + name,
                     y,
@@ -437,11 +614,11 @@ def qwen_manifest(bundle_path, out, *, phase, context, steps=16, small=False, ma
                     0,
                     outbuf,
                     rows,
-                    ff,
+                    n,
                     width,
                     (width, 1),
                     (1, width),
-                    (ff, 1),
+                    (n, 1),
                 )
             emit(
                 stem + ".swiglu",
@@ -504,6 +681,7 @@ def qwen_manifest(bundle_path, out, *, phase, context, steps=16, small=False, ma
             precision="BF16 operands and storage; FP32 reductions/MMA accumulator",
             software=bundle["software"],
             mapping=mapping,
+            **({"software_options": sw} if software is not None else {}),
             initial_cache="cold",
             initial_kv="empty"
             if phase == "prefill"

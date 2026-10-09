@@ -80,7 +80,8 @@ on the machine where they are invoked.
 For a standalone experiment, start with the Chinese [complete baseline](docs/baseline_cn.md) and its [frozen configuration](examples/project-baseline-v4.json). It uses the pinned Ventus default structure plus fixed modeled multi-precision support, a unified 1.11 mm² area budget, and Qwen as the complete core task.
 
 For the collaborative experiments, start with the Chinese
-[project task guide](docs/project_tasks_cn.md). The
+[project task guide](docs/project_tasks_cn.md). One complete A/B/C study, with its
+search tools, is in [qwen-abc-study.md](docs/qwen-abc-study.md). The
 [instruction simulator implementation prompt](prompts/instruction-simulator-cn.md)
 defines the current program-input and timing-backend work.
 

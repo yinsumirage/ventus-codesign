@@ -164,6 +164,7 @@ def main():
     p.add_argument("--steps", type=int, default=16)
     p.add_argument("--small", action="store_true")
     p.add_argument("--mapping", choices=["scalar", "packed", "packed64"], default="packed")
+    p.add_argument("--software", type=Path, help="JSON packed64 software options")
     p.add_argument("--out", type=Path, required=True)
     p = sub.add_parser("compile-kernel")
     p.add_argument("--source", type=Path, required=True)
@@ -206,6 +207,7 @@ def main():
             steps=args.steps,
             small=args.small,
             mapping=args.mapping,
+            software=json.loads(args.software.read_text()) if args.software else None,
         )
         return
     if args.command == "compile-kernel":
